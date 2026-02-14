@@ -201,7 +201,8 @@ typedef enum {
   #elif defined STM32WL
   #endif
 
-#elif defined UARTD_USE_UART2 || defined UARTD_USE_UART2_PA2PA3 || defined UARTD_USE_UART2_PD5PD6 || defined UARTD_USE_UART2_PB3PB4 || defined UARTD_USE_UART2_PA14PA15
+#elif defined UARTD_USE_UART2 || defined UARTD_USE_UART2_PA2PA3 || defined UARTD_USE_UART2_PD5PD6 || \
+      defined UARTD_USE_UART2_PB3PB4 || defined UARTD_USE_UART2_PA14PA15 || defined UARTD_USE_UART2_PB3PA15
   #define UARTD_UARTx             USART2
   #ifdef UARTD_USE_UART2
     // user needs to specify UARTD_USE_TX_IO, UARTD_USE_RX_IO, and possibly UARTD_USE_IO_AF
@@ -216,6 +217,9 @@ typedef enum {
     #define UARTD_RX_IO           IO_PB4
   #elif defined UARTD_USE_UART2_PA14PA15 // only G4, F0 // ATTENTION: on G4 PA14 overlaps with SWCLK // was UART2_REMAPPED3
     #define UARTD_TX_IO           IO_PA14
+    #define UARTD_RX_IO           IO_PA15
+  #elif defined UARTD_USE_UART2_PB3PA15 // only G4
+    #define UARTD_TX_IO           IO_PB3
     #define UARTD_RX_IO           IO_PA15
   #endif
   #ifndef STM32F0
@@ -455,10 +459,10 @@ typedef enum {
 
 
 // catch missing defines, compiler will throw error anyhow, but so it is nicer
-#if defined UART_USE_TX && !defined UARTD_TX_IO
+#if defined UARTD_USE_TX && !defined UARTD_TX_IO
   #error No UARTD TX IO defined!
 #endif
-#if defined UART_USE_RX && !defined UARTD_RX_IO
+#if defined UARTD_USE_RX && !defined UARTD_RX_IO
   #error No UARTD RX IO defined!
 #endif
 #if !defined UARTD_IO_AF

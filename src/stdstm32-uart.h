@@ -201,7 +201,8 @@ typedef enum {
   #elif defined STM32WL
   #endif
 
-#elif defined UART_USE_UART2 || defined UART_USE_UART2_PA2PA3 || defined UART_USE_UART2_PD5PD6 || defined UART_USE_UART2_PB3PB4 || defined UART_USE_UART2_PA14PA15
+#elif defined UART_USE_UART2 || defined UART_USE_UART2_PA2PA3 || defined UART_USE_UART2_PD5PD6 || \
+      defined UART_USE_UART2_PB3PB4 || defined UART_USE_UART2_PA14PA15 || defined UART_USE_UART2_PB3PA15
   #define UART_UARTx             USART2
   #ifdef UART_USE_UART2
     // user needs to specify UART_USE_TX_IO, UART_USE_RX_IO, and possibly UART_USE_IO_AF
@@ -216,6 +217,9 @@ typedef enum {
     #define UART_RX_IO           IO_PB4
   #elif defined UART_USE_UART2_PA14PA15 // only G4, F0 // ATTENTION: on G4 PA14 overlaps with SWCLK // was UART2_REMAPPED3
     #define UART_TX_IO           IO_PA14
+    #define UART_RX_IO           IO_PA15
+  #elif defined UART_USE_UART2_PB3PA15 // only G4
+    #define UART_TX_IO           IO_PB3
     #define UART_RX_IO           IO_PA15
   #endif
   #ifndef STM32F0
