@@ -120,6 +120,23 @@ void rcc_init_gpio(GPIO_TypeDef* GPIOx)
 #endif
   if (GPIOx == GPIOF) { LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_GPIOF); }
 
+#elif defined STM32C5
+  if (GPIOx == GPIOA) { LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOA); }
+  if (GPIOx == GPIOB) { LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOB); }
+  if (GPIOx == GPIOC) { LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOC); }
+#if defined(GPIOD)
+  if (GPIOx == GPIOD) { LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOD); }
+#endif
+#if defined(GPIOE)
+  if (GPIOx == GPIOE) { LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOE); }
+#endif
+#if defined(GPIOF)
+  if (GPIOx == GPIOF) { LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOF); }
+#endif
+#if defined(GPIOH)
+  if (GPIOx == GPIOH) { LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOH); }
+#endif
+
 #endif
 }
 
@@ -228,7 +245,13 @@ void rcc_init_uart(USART_TypeDef* USARTx)
 #endif
 
 #if defined(LPUART1)
+  #if defined STM32C5
+  if (USARTx == LPUART1) { LL_APB3_GRP1_EnableClock(LL_APB3_GRP1_PERIPH_LPUART1); }
+  #elif defined STM32G4 || defined STM32L4 || defined STM32WL
   if (USARTx == LPUART1) { LL_APB1_GRP2_EnableClock(LL_APB1_GRP2_PERIPH_LPUART1); }
+  #else
+    #error LPUART1 bus mapping not configured for this family
+  #endif
 #endif
 }
 
@@ -308,6 +331,11 @@ void rcc_init_adc(ADC_TypeDef* ADCx)
   if (ADCx == ADC1) { LL_APB1_GRP2_EnableClock(LL_APB1_GRP2_PERIPH_ADC1); }
 #endif
 
+#elif defined STM32C5
+#if defined(ADC1)
+  if (ADCx == ADC1) { LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_ADC12); }
+#endif
+
 #endif
 }
 
@@ -319,6 +347,11 @@ void rcc_init_dac(DAC_TypeDef* DACx)
 #if defined STM32F3
 #if defined(DAC1)
   if (DACx == DAC1) { LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_DAC1); }
+#endif
+#endif
+#if defined STM32C5
+#if defined(DAC1)
+  if (DACx == DAC1) { LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_DAC1); }
 #endif
 #endif
 }
@@ -538,7 +571,7 @@ LL_GPIO_InitTypeDef GPIO_InitStruct = {};
     default: while (1) {}
   }
 
-#if defined STM32F7 || defined STM32G4 || defined STM32F3 || defined STM32L4 || defined STM32WL || defined STM32F0
+#if defined STM32F7 || defined STM32G4 || defined STM32F3 || defined STM32L4 || defined STM32WL || defined STM32F0 || defined STM32C5
   switch (af) {
     case IO_AF_DEFAULT: GPIO_InitStruct.Alternate = LL_GPIO_AF_0; break;
     case IO_AF_0: GPIO_InitStruct.Alternate = LL_GPIO_AF_0; break;
@@ -758,6 +791,9 @@ uint16_t _tim_devider(TIM_TypeDef* TIMx)
   return 1;
 
 #elif defined STM32WL || defined STM32F0 // all timer run on 48 MHz
+  return 1;
+
+#elif defined STM32C5 // all timer run on 144 MHz
   return 1;
 
 #endif

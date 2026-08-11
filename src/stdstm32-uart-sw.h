@@ -322,6 +322,14 @@ void swuart_setbaudrate(uint32_t baud)
   default:
     ATOMIC(swuart_bittime_ccr = 87; swuart_bittime_ccr15 = 130 - 20);
   }
+#elif defined STM32C5 // 18 MHz
+  switch (baud) {
+  case 115200: ATOMIC(swuart_bittime_ccr = 156; swuart_bittime_ccr15 = 234 - 20); break;
+  case 57600:  ATOMIC(swuart_bittime_ccr = 312; swuart_bittime_ccr15 = 468); break;
+  case 9600:   ATOMIC(swuart_bittime_ccr = 1875; swuart_bittime_ccr15 = 2813); break;
+  default:
+    ATOMIC(swuart_bittime_ccr = 156; swuart_bittime_ccr15 = 234 - 20);
+  }
 #endif
 #endif
 }
@@ -369,6 +377,8 @@ void swuart_init_isroff(void)
   tim_init_up(SWUART_TIMx, 0xFFFFFFFF, TIMER_BASE_8MHZ);
 #elif defined STM32G4 || defined STM32L4
   tim_init_up(SWUART_TIMx, 0xFFFFFFFF, TIMER_BASE_10MHZ);
+#elif defined STM32C5
+  tim_init_up(SWUART_TIMx, 0xFFFFFFFF, TIMER_BASE_18MHZ);
 #else
   #error stm not supported by swuart !
 #endif

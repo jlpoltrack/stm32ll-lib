@@ -33,6 +33,8 @@ extern "C" {
     #define EE_PAGE_SIZE  0x0800 // Page size = 2 KByte
   #elif defined STM32WL
     #define EE_PAGE_SIZE  0x0800 // Page size = 2 KByte
+  #elif defined STM32C5
+    #define EE_PAGE_SIZE  0x2000 // page size = 8 KByte (FLASH_PAGE_SIZE = 0x2000)
   #elif defined STM32F070xB || defined STM32F072xB // page size varies across family members
     #define EE_PAGE_SIZE  0x0800 // Page size = 2 KByte
   #endif
@@ -44,13 +46,13 @@ extern "C" {
   #error NO EE_START_PAGE specified!
 #endif
 
-#if defined STM32G4 || defined STM32L4 || defined STM32WL
+#if defined STM32G4 || defined STM32L4 || defined STM32WL || defined STM32C5
   #ifndef EE_USE_DOUBLEWORD
-    #define EE_USE_DOUBLEWORD // G4 must use DOUBLEWORD
+    #define EE_USE_DOUBLEWORD // G4/L4/WL/C5 must use DOUBLEWORD
   #endif
 #endif
 
-#if !defined EE_USE_WORD && !defined EE_USE_DOUBLEWORD
+#if !defined EE_USE_WORD && !defined EE_USE_DOUBLEWORD && !defined EE_USE_QUADWORD
   #define EE_USE_WORD
 #endif
 
@@ -213,6 +215,28 @@ FLASH_EraseInitTypeDef pEraseInit = {};
     status = HAL_FLASHEx_Erase(&pEraseInit, &PageError);
     return (status == HAL_OK) ? FLASH_STATUS_COMPLETE : FLASH_STATUS_TIMEOUT;
 
+#elif defined STM32C5
+// C5 uses new flash IP with LL layer directly (HAL is handle-based, incompatible with G4 pattern).
+// dual-bank: FLASH_PAGE_NB pages per bank. Bank selected via FLASH_CR_BKSEL.
+// LL_FLASH_ERASE_BANK_1 = 0, LL_FLASH_ERASE_BANK_2 = FLASH_CR_BKSEL.
+uint32_t bank = (Page_No >= FLASH_PAGE_NB) ? LL_FLASH_ERASE_BANK_2 : LL_FLASH_ERASE_BANK_1;
+uint32_t page_in_bank = Page_No % FLASH_PAGE_NB;
+
+    // wait for any pending operation (BSY | WBNE | DBNE)
+    while (LL_FLASH_IsActiveFlag(FLASH, LL_FLASH_FLAG_STATUS_ALL)) {}
+    // clear stale EOP and all error flags
+    LL_FLASH_ClearFlag_EOP(FLASH);
+    LL_FLASH_ClearFlag(FLASH, LL_FLASH_FLAG_ERRORS_ALL);
+    // start page erase (area=0 for main flash)
+    LL_FLASH_StartErasePage(FLASH, bank, 0U, page_in_bank);
+    // wait for erase to complete (BSY | WBNE | DBNE)
+    while (LL_FLASH_IsActiveFlag(FLASH, LL_FLASH_FLAG_STATUS_ALL)) {}
+    // clear PER so it does not persist into the next programming op
+    LL_FLASH_DisablePageErase(FLASH);
+    if (LL_FLASH_IsActiveFlag(FLASH, LL_FLASH_FLAG_ERRORS_ALL)) return FLASH_STATUS_ERROR_WRP;
+    LL_FLASH_ClearFlag_EOP(FLASH);
+    return FLASH_STATUS_COMPLETE;
+
 #endif
 }
 
@@ -223,7 +247,7 @@ FLASH_STATUS_ENUM FLASH_ProgramWord(uint32_t Address, uint32_t Data)
     return (HAL_FLASH_Program_GD32F1(FLASH_TYPEPROGRAM_WORD, Address, Data) == HAL_OK) ? FLASH_STATUS_COMPLETE : FLASH_STATUS_TIMEOUT;
 #elif defined STM32F3 || defined STM32F7 || defined STM32F0
     return (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, Address, Data) == HAL_OK) ? FLASH_STATUS_COMPLETE : FLASH_STATUS_TIMEOUT;
-#elif defined STM32G4 || defined STM32L4 || defined STM32WL
+#elif defined STM32G4 || defined STM32L4 || defined STM32WL || defined STM32C5
     return FLASH_STATUS_ERROR_PG;
 #endif
 }
@@ -235,23 +259,94 @@ FLASH_STATUS_ENUM FLASH_ProgramDoubleWord(uint32_t Address, uint64_t Data)
     return FLASH_STATUS_ERROR_PG;
 #elif defined STM32F3 || defined STM32F7 || defined STM32G4 || defined STM32L4 || defined STM32WL || defined STM32F0
     return (HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD, Address, Data) == HAL_OK) ? FLASH_STATUS_COMPLETE : FLASH_STATUS_TIMEOUT;
+#elif defined STM32C5
+// C5 HAL uses a handle-based API incompatible with the legacy HAL_FLASH_Program() call.
+// use LL layer: wait, clear flags, set PG bit, write two 32-bit words, wait, clear PG.
+    // wait for any in-flight flash op to settle (BSY | WBNE | DBNE)
+    while (LL_FLASH_IsActiveFlag(FLASH, LL_FLASH_FLAG_STATUS_ALL)) {}
+    // clear stale EOP and all error flags
+    LL_FLASH_ClearFlag_EOP(FLASH);
+    LL_FLASH_ClearFlag(FLASH, LL_FLASH_FLAG_ERRORS_ALL);
+    LL_FLASH_EnableProgramming(FLASH);
+    *(__IO uint32_t*)Address = (uint32_t)(Data);
+    *(__IO uint32_t*)(Address + 4U) = (uint32_t)(Data >> 32U);
+    // wait for completion (BSY | WBNE | DBNE)
+    while (LL_FLASH_IsActiveFlag(FLASH, LL_FLASH_FLAG_STATUS_ALL)) {}
+    LL_FLASH_DisableProgramming(FLASH);
+    if (LL_FLASH_IsActiveFlag(FLASH, LL_FLASH_FLAG_ERRORS_ALL)) return FLASH_STATUS_ERROR_PG;
+    LL_FLASH_ClearFlag_EOP(FLASH);
+    return FLASH_STATUS_COMPLETE;
 #endif
 }
+
+
+#if defined EE_USE_QUADWORD
+
+// pData must point to 4 consecutive uint32_t (128 bit), and Address must be 16 byte aligned
+FLASH_STATUS_ENUM FLASH_ProgramQuadWord(uint32_t Address, const uint32_t* pData)
+{
+    // no family in this branch uses quad-word programming
+    (void)Address; (void)pData;
+    return FLASH_STATUS_ERROR_PG;
+}
+
+#endif
 
 
 //-------------------------------------------------------
 // EEPROM HAL
 //-------------------------------------------------------
 
+// on C5 the flash is cacheable, so it must not be modified while the ICACHE is enabled.
+// done by direct register write so this does not depend on the project pulling in the
+// ll_icache / hal_icache headers.
+#if defined ICACHE
+static uint32_t _ee_icache_was_enabled;
+#endif
+
+
 void ee_hal_unlock(void)
 {
+#if defined ICACHE
+    // clearing EN also starts a full cache invalidate, see the ICACHE chapter of the RM
+    _ee_icache_was_enabled = READ_BIT(ICACHE->CR, ICACHE_CR_EN);
+    if (_ee_icache_was_enabled) {
+        WRITE_REG(ICACHE->FCR, ICACHE_FCR_CBSYENDF);
+        CLEAR_BIT(ICACHE->CR, ICACHE_CR_EN);
+        while (READ_BIT(ICACHE->CR, ICACHE_CR_EN) != 0U) {}
+    }
+#endif
+
+#if defined STM32C5
+    // C5 HAL has no HAL_FLASH_Unlock(). Use LL key sequence directly.
+    if (LL_FLASH_IsLocked(FLASH)) {
+        LL_FLASH_SetUnlockKey(FLASH, LL_FLASH_KEY1);
+        LL_FLASH_SetUnlockKey(FLASH, LL_FLASH_KEY2);
+    }
+#else
     HAL_FLASH_Unlock();
+#endif
 }
 
 
 void ee_hal_lock(void)
 {
+#if defined STM32C5
+    // C5 HAL has no HAL_FLASH_Lock(). Use LL directly.
+    LL_FLASH_Lock(FLASH);
+#else
     HAL_FLASH_Lock();
+#endif
+
+#if defined ICACHE
+    // wait for the invalidate started by the disable to finish before re-enabling,
+    // else early accesses are treated as noncacheable
+    if (_ee_icache_was_enabled) {
+        while (READ_BIT(ICACHE->SR, ICACHE_SR_BSYENDF) == 0U) {}
+        WRITE_REG(ICACHE->FCR, ICACHE_FCR_CBSYENDF);
+        SET_BIT(ICACHE->CR, ICACHE_CR_EN);
+    }
+#endif
 }
 
 
@@ -271,6 +366,14 @@ uint16_t ee_hal_programdoubleword(uint32_t Address, uint64_t Data)
 {
     return (FLASH_ProgramDoubleWord(Address, Data) == FLASH_STATUS_COMPLETE) ? 1 : 0;
 }
+
+
+#if defined EE_USE_QUADWORD
+uint16_t ee_hal_programquadword(uint32_t Address, const uint32_t* pData)
+{
+    return (FLASH_ProgramQuadWord(Address, pData) == FLASH_STATUS_COMPLETE) ? 1 : 0;
+}
+#endif
 
 
 //-------------------------------------------------------
@@ -308,7 +411,7 @@ uint32_t ToPageBaseAddress, ToPageEndAddress, FromPageBaseAddress, PageNo, adr;
     if (!ee_hal_erasepage(ToPageBaseAddress, PageNo)) { status = EE_STATUS_FLASH_FAIL; goto QUICK_EXIT; }
 
     // Write data to ToPage
-#if !defined EE_USE_WORD && !defined EE_USE_DOUBLEWORD
+#if !defined EE_USE_WORD && !defined EE_USE_DOUBLEWORD && !defined EE_USE_QUADWORD
 uint16_t val;
 
     if (data == NULL) datalen = EE_PAGE_SIZE-16 -16; // -16 to be on the safe side
@@ -355,6 +458,33 @@ uint32_t val;
 
     // Set ToPage status to EE_VALID_PAGE status
     if (!ee_hal_programword(ToPageBaseAddress, EE_VALID_PAGE)) { status = EE_STATUS_FLASH_FAIL; goto QUICK_EXIT; }
+
+#elif defined EE_USE_QUADWORD
+uint32_t val[4]; // HAL reads the source as uint32_t*, so natural alignment is enough
+
+    if (data == NULL) datalen = EE_PAGE_SIZE-16 -16; // -16 to be on the safe side
+
+    datalen = (datalen + 15)/16; // adjust datalen to be 128 bit aligned
+
+    for (n = 0; n < datalen; n++) {
+        if (data == NULL) {
+            adr = FromPageBaseAddress + 16 + 16*n;
+            for (uint8_t i = 0; i < 4; i++) val[i] = (*(__IO uint32_t*)(adr + 4*i));
+        } else {
+            for (uint8_t i = 0; i < 4; i++) val[i] = ((uint32_t*)data)[4*n + i];
+        }
+        if ((val[0] != (uint32_t)0xFFFFFFFF) || (val[1] != (uint32_t)0xFFFFFFFF) ||
+            (val[2] != (uint32_t)0xFFFFFFFF) || (val[3] != (uint32_t)0xFFFFFFFF)) {
+            adr = ToPageBaseAddress + 16 + 16*n;
+            if (adr >= ToPageEndAddress) { status = EE_STATUS_PAGE_FULL; goto QUICK_EXIT; }
+            if (!ee_hal_programquadword(adr, val)) { status = EE_STATUS_FLASH_FAIL; goto QUICK_EXIT; }
+        }
+    }
+
+    // Set ToPage status to EE_VALID_PAGE status
+    val[0] = EE_VALID_PAGE;
+    val[1] = val[2] = val[3] = (uint32_t)0xFFFFFFFF;
+    if (!ee_hal_programquadword(ToPageBaseAddress, val)) { status = EE_STATUS_FLASH_FAIL; goto QUICK_EXIT; }
 
 #else
 uint64_t val;

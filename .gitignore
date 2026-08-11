@@ -50,3 +50,13 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# macOS
+.DS_Store
+
+# Cube Drivers & vendor docs
+/C5_Docs/
+/docs/stm32h5xx-hal-driver-main/
+/docs/cmsis-device-h5-main/
+/docs/stm32c5xx-drivers-main/
+/docs/*.pdf

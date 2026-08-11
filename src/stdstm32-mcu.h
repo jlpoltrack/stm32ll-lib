@@ -46,6 +46,8 @@ uint32_t mcu_cpu_id(void)
 #define ST_BOOTLOADER_ADDRESS               0x1FFF0000
 #elif defined STM32F070xB || defined STM32F072xB // system memory location varies across the STM32F0 family
 #define ST_BOOTLOADER_ADDRESS               0x1FFFC800
+#elif defined STM32C5
+#define ST_BOOTLOADER_ADDRESS               0x0BF80080
 #else
   #warning ST_BOOTLOADER_ADDRESS not defined for chip !
 #endif
@@ -121,6 +123,23 @@ void BootLoaderInit(void)
  #if defined STM32G4
      LL_SYSCFG_SetRemapMemory(LL_SYSCFG_REMAP_SYSTEMFLASH);
  #endif
+    // no remap is done on C5, and none is needed: the remap is not what makes the jump work.
+#if defined STM32C5
+    // what actually blocks bootloader entry here is MSPLIM. C5 is Cortex-M33 (ARMv8-M),
+    // and CubeMX startup code sets MSPLIM to the top of RAM. the bootloader's own MSP sits
+    // well below that, so setting MSP without first lowering MSPLIM faults immediately.
+    __set_MSPLIM(0x00000000U);
+
+    // an enabled ICACHE interferes with bootloader execution, turn it off.
+    // done by direct register write so this does not depend on the project pulling in
+    // the ll_icache / hal_icache headers
+#if defined(ICACHE)
+    ICACHE->CR &= ~ICACHE_CR_EN;
+#endif
+
+    // point the vector table at the bootloader before jumping
+    SCB->VTOR = ST_BOOTLOADER_ADDRESS;
+#endif
 
     // set main stack pointer to its default
     __set_MSP( *((volatile uint32_t*)ST_BOOTLOADER_ADDRESS) );
