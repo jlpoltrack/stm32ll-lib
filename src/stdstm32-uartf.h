@@ -45,6 +45,88 @@ extern "C" {
 
 
 //-------------------------------------------------------
+// C5 (HAL2) LL compatibility
+//-------------------------------------------------------
+// The C5 driver package renamed much of the LL USART/LPUART API and dropped the aggregate
+// initializers. Aliasing the classic names here keeps every call site below family-neutral.
+
+#if defined STM32C5 && !defined STDSTM32_UART_C5_COMPAT
+#define STDSTM32_UART_C5_COMPAT
+
+#define LL_USART_STOPBITS_0_5           LL_USART_STOP_BIT_0_5
+#define LL_USART_STOPBITS_1             LL_USART_STOP_BIT_1
+#define LL_USART_STOPBITS_1_5           LL_USART_STOP_BIT_1_5
+#define LL_USART_STOPBITS_2             LL_USART_STOP_BIT_2
+#define LL_USART_DATAWIDTH_8B           LL_USART_DATAWIDTH_8_BIT
+#define LL_USART_DATAWIDTH_9B           LL_USART_DATAWIDTH_9_BIT
+#define LL_LPUART_STOPBITS_1            LL_LPUART_STOP_BIT_1
+#define LL_LPUART_STOPBITS_2            LL_LPUART_STOP_BIT_2
+#define LL_LPUART_DATAWIDTH_8B          LL_LPUART_DATAWIDTH_8_BIT
+#define LL_LPUART_DATAWIDTH_9B          LL_LPUART_DATAWIDTH_9_BIT
+#define LL_LPUART_FIFOTHRESHOLD_1_8     LL_LPUART_FIFO_THRESHOLD_1_8
+
+#define LL_USART_ReadReg(inst, reg)         LL_USART_READ_REG(inst, reg)
+#define LL_USART_WriteReg(inst, reg, val)   LL_USART_WRITE_REG(inst, reg, val)
+
+// the RXNE/TXE interrupt calls gained the FIFO suffixes
+#define LL_USART_EnableIT_RXNE          LL_USART_EnableIT_RXNE_RXFNE
+#define LL_USART_DisableIT_RXNE         LL_USART_DisableIT_RXNE_RXFNE
+#define LL_USART_IsEnabledIT_RXNE       LL_USART_IsEnabledIT_RXNE_RXFNE
+#define LL_USART_EnableIT_TXE           LL_USART_EnableIT_TXE_TXFNF
+#define LL_USART_DisableIT_TXE          LL_USART_DisableIT_TXE_TXFNF
+#define LL_USART_IsEnabledIT_TXE        LL_USART_IsEnabledIT_TXE_TXFNF
+
+// kernel clock for the baud divisor. every UART is left on its APB clock, which is the
+// reset default of the RCC_CCIPR xxxSEL fields.
+static inline uint32_t _ll_uart_periphclk(USART_TypeDef* UARTx)
+{
+  uint32_t hclk = SystemCoreClock; // CMSIS defines this as the core/AHB clock
+#if defined USART1
+  if (UARTx == USART1) return LL_RCC_CALC_PCLK2_FREQ(hclk, LL_RCC_GetAPB2Prescaler());
+#endif
+#if defined LPUART1
+  if (UARTx == LPUART1) return LL_RCC_CALC_PCLK3_FREQ(hclk, LL_RCC_GetAPB3Prescaler());
+#endif
+  return LL_RCC_CALC_PCLK1_FREQ(hclk, LL_RCC_GetAPB1Prescaler());
+}
+
+typedef struct {
+  uint32_t BaudRate;
+  uint32_t DataWidth;
+  uint32_t StopBits;
+  uint32_t Parity;
+  uint32_t TransferDirection;
+  uint32_t HardwareFlowControl;
+  uint32_t OverSampling;
+  uint32_t PrescalerValue;
+} LL_USART_InitTypeDef;
+
+typedef LL_USART_InitTypeDef LL_LPUART_InitTypeDef; // LPUART ignores OverSampling
+
+static inline void LL_USART_Init(USART_TypeDef* UARTx, LL_USART_InitTypeDef* ini)
+{
+  LL_USART_SetTransferDirection(UARTx, ini->TransferDirection);
+  LL_USART_ConfigCharacter(UARTx, ini->DataWidth, ini->Parity, ini->StopBits);
+  LL_USART_SetHWFlowCtrl(UARTx, ini->HardwareFlowControl);
+  LL_USART_SetOverSampling(UARTx, ini->OverSampling);
+  LL_USART_SetPrescaler(UARTx, ini->PrescalerValue);
+  LL_USART_SetBaudRate(UARTx, _ll_uart_periphclk(UARTx), ini->PrescalerValue,
+                       ini->OverSampling, ini->BaudRate);
+}
+
+static inline void LL_LPUART_Init(USART_TypeDef* UARTx, LL_LPUART_InitTypeDef* ini)
+{
+  LL_LPUART_SetTransferDirection(UARTx, ini->TransferDirection);
+  LL_LPUART_ConfigCharacter(UARTx, ini->DataWidth, ini->Parity, ini->StopBits);
+  LL_LPUART_SetHWFlowCtrl(UARTx, ini->HardwareFlowControl);
+  LL_LPUART_SetPrescaler(UARTx, ini->PrescalerValue);
+  LL_LPUART_SetBaudRate(UARTx, _ll_uart_periphclk(UARTx), ini->PrescalerValue, ini->BaudRate);
+}
+
+#endif // STM32C5 compat
+
+
+//-------------------------------------------------------
 // Enums
 //-------------------------------------------------------
 // in order to not introduce hardware dependency upstream

@@ -13,6 +13,32 @@ extern "C" {
 
 
 //-------------------------------------------------------
+// C5 (HAL2) compatibility
+//-------------------------------------------------------
+// The C5 driver package dropped FunctionalState, which on every other family comes from the
+// CMSIS device header. Higher level code passes ENABLE/DISABLE around, so provide it.
+
+#if defined STM32C5
+typedef enum {
+  DISABLE = 0,
+  ENABLE = !DISABLE,
+} FunctionalState;
+
+// the register access macros were all renamed with an STM32_ prefix
+#ifndef SET_BIT
+#define SET_BIT(REG, BIT)       STM32_SET_BIT(REG, BIT)
+#define CLEAR_BIT(REG, BIT)     STM32_CLEAR_BIT(REG, BIT)
+#define READ_BIT(REG, BIT)      STM32_READ_BIT(REG, BIT)
+#define CLEAR_REG(REG)          STM32_CLEAR_REG(REG)
+#define WRITE_REG(REG, VAL)     STM32_WRITE_REG(REG, VAL)
+#define READ_REG(REG)           STM32_READ_REG(REG)
+#define MODIFY_REG(REG, C, S)   STM32_MODIFY_REG(REG, C, S)
+#define POSITION_VAL(VAL)       STM32_POSITION_VAL(VAL)
+#endif
+#endif
+
+
+//-------------------------------------------------------
 // NVIC
 //-------------------------------------------------------
 
@@ -200,7 +226,12 @@ void rcc_init_tim(TIM_TypeDef* TIMx)
 void rcc_init_lptim(LPTIM_TypeDef* LPTIMx)
 {
 #if defined(LPTIM1)
+  // C5 puts LPTIM1 on APB3, like it does LPUART1
+#if defined STM32C5
+  if (LPTIMx == LPTIM1) { LL_APB3_GRP1_EnableClock(LL_APB3_GRP1_PERIPH_LPTIM1); }
+#else
   if (LPTIMx == LPTIM1) { LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_LPTIM1); }
+#endif
 #endif
 #if defined(LPTIM2)
   if (LPTIMx == LPTIM2) { LL_APB1_GRP2_EnableClock(LL_APB1_GRP2_PERIPH_LPTIM2); }
@@ -459,6 +490,11 @@ void rcc_init_dma(DMA_TypeDef* DMAx)
 #if defined(GPIOE)
 #define IO_PE0   GPIOE, LL_GPIO_PIN_0
 #define IO_PE1   GPIOE, LL_GPIO_PIN_1
+#define IO_PE2   GPIOE, LL_GPIO_PIN_2
+#define IO_PE3   GPIOE, LL_GPIO_PIN_3
+#define IO_PE4   GPIOE, LL_GPIO_PIN_4
+#define IO_PE5   GPIOE, LL_GPIO_PIN_5
+#define IO_PE6   GPIOE, LL_GPIO_PIN_6
 #define IO_PE7   GPIOE, LL_GPIO_PIN_7
 #define IO_PE8   GPIOE, LL_GPIO_PIN_8
 #define IO_PE9   GPIOE, LL_GPIO_PIN_9
@@ -521,6 +557,40 @@ typedef enum { // just for convenience to use in higher level code
 
 GPIO_TypeDef* IO_GPIOx(GPIO_TypeDef* GPIOx, uint32_t GPIO_Pin) { return GPIOx; }
 uint32_t IO_PINx(GPIO_TypeDef* GPIOx, uint32_t GPIO_Pin) { return GPIO_Pin; }
+
+
+#if defined STM32C5
+// The C5 driver package (HAL2) dropped the aggregate LL initializers, so there is no
+// LL_GPIO_Init()/LL_GPIO_InitTypeDef, only per-attribute setters. Shim them so the body of
+// _gpio_init() below stays family-neutral. Zero-init is safe: PULL_NO and PUSHPULL are both 0.
+typedef struct {
+  uint32_t Pin;
+  uint32_t Mode;
+  uint32_t Speed;
+  uint32_t OutputType;
+  uint32_t Pull;
+  uint32_t Alternate;
+} LL_GPIO_InitTypeDef;
+
+void LL_GPIO_Init(GPIO_TypeDef* GPIOx, LL_GPIO_InitTypeDef* ini)
+{
+  for (uint32_t pins = ini->Pin; pins; pins &= pins - 1) {
+    uint32_t pin = pins & (~pins + 1); // isolate lowest set bit, one LL_GPIO_PIN_x
+
+    if (ini->Mode == LL_GPIO_MODE_ALTERNATE) { // set the AF before switching the mode over
+      if (pin < LL_GPIO_PIN_8) {
+        LL_GPIO_SetAFPin_0_7(GPIOx, pin, ini->Alternate);
+      } else {
+        LL_GPIO_SetAFPin_8_15(GPIOx, pin, ini->Alternate);
+      }
+    }
+    LL_GPIO_SetPinSpeed(GPIOx, pin, ini->Speed);
+    LL_GPIO_SetPinOutputType(GPIOx, pin, ini->OutputType);
+    LL_GPIO_SetPinPull(GPIOx, pin, ini->Pull);
+    LL_GPIO_SetPinMode(GPIOx, pin, ini->Mode); // mode last, it is what activates the pin
+  }
+}
+#endif
 
 
 void _gpio_init(GPIO_TypeDef* GPIOx, uint32_t GPIO_Pin, IOMODEENUM mode, IOSPEEDENUM speed, IOAFENUM af, uint8_t init_rcc)
@@ -798,6 +868,65 @@ uint16_t _tim_devider(TIM_TypeDef* TIMx)
 
 #endif
 }
+
+
+#if defined STM32C5
+// same story as LL_GPIO_Init() above: HAL2 has the per-attribute setters but no aggregate
+// initializer. C5 also renamed LL_TIM_CLOCKSOURCE_INTERNAL.
+#define LL_TIM_CLOCKSOURCE_INTERNAL  LL_TIM_CLK_INTERNAL
+
+typedef struct {
+  uint16_t Prescaler;
+  uint32_t CounterMode;
+  uint32_t Autoreload;
+  uint32_t ClockDivision;
+  uint8_t RepetitionCounter;
+} LL_TIM_InitTypeDef;
+
+void LL_TIM_Init(TIM_TypeDef* TIMx, LL_TIM_InitTypeDef* ini)
+{
+  LL_TIM_SetCounterMode(TIMx, ini->CounterMode);
+  LL_TIM_SetAutoReload(TIMx, ini->Autoreload);
+  LL_TIM_SetPrescaler(TIMx, ini->Prescaler);
+  if (IS_TIM_CLOCK_DIVISION_INSTANCE(TIMx)) LL_TIM_SetClockDivision(TIMx, ini->ClockDivision);
+  if (IS_TIM_REPETITION_COUNTER_INSTANCE(TIMx)) LL_TIM_SetRepetitionCounter(TIMx, ini->RepetitionCounter);
+  LL_TIM_GenerateEvent_UPDATE(TIMx); // load the prescaler, as ST's own LL_TIM_Init() does
+}
+
+
+typedef struct {
+  uint32_t OCMode;
+  uint32_t OCState;
+  uint32_t OCNState;
+  uint32_t CompareValue;
+  uint32_t OCPolarity;
+  uint32_t OCNPolarity;
+  uint32_t OCIdleState;
+  uint32_t OCNIdleState;
+} LL_TIM_OC_InitTypeDef;
+
+void LL_TIM_OC_Init(TIM_TypeDef* TIMx, uint32_t Channel, LL_TIM_OC_InitTypeDef* ini)
+{
+  LL_TIM_OC_SetMode(TIMx, Channel, ini->OCMode);
+  LL_TIM_OC_SetPolarity(TIMx, Channel, ini->OCPolarity);
+
+  switch (Channel) {
+    case LL_TIM_CHANNEL_CH1: LL_TIM_OC_SetCompareCH1(TIMx, ini->CompareValue); break;
+    case LL_TIM_CHANNEL_CH2: LL_TIM_OC_SetCompareCH2(TIMx, ini->CompareValue); break;
+    case LL_TIM_CHANNEL_CH3: LL_TIM_OC_SetCompareCH3(TIMx, ini->CompareValue); break;
+    case LL_TIM_CHANNEL_CH4: LL_TIM_OC_SetCompareCH4(TIMx, ini->CompareValue); break;
+    default: break;
+  }
+
+  // mLRS uses the compare units to raise interrupts, not to drive pins, so OCState is
+  // normally left at 0 = output off
+  if (ini->OCState) {
+    LL_TIM_CC_EnableChannel(TIMx, Channel);
+  } else {
+    LL_TIM_CC_DisableChannel(TIMx, Channel);
+  }
+}
+#endif
 
 
 // do not enable timer
