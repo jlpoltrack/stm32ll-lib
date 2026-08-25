@@ -28,9 +28,10 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#ifndef HAL_I2C_MODULE_ENABLED
+#if !defined STM32C5 && !defined HAL_I2C_MODULE_ENABLED
+  // C5 does not need it, its arm below is LL only
   #error HAL_I2C_MODULE_ENABLED not defined, enable it in Core\Inc\stm32yyxx_hal_conf.h!
-#else
+#endif
 
 
 //-------------------------------------------------------
@@ -86,6 +87,17 @@ extern "C" {
   #define I2C_RX_DMAx_Channely_IRQn        DMA1_Channel1_IRQn
   #define I2C_TX_DMAx_Channely_IRQHandler  DMA1_Channel2_IRQHandler
   #define I2C_RX_DMAx_Channely_IRQHandler  DMA1_Channel1_IRQHandler
+#elif defined STM32C5
+  // PB6/PB7 also carry I2C1 on C5, but are usually taken by LPUART1
+  #define I2C_SCL_IO             IO_PB8
+  #define I2C_SDA_IO             IO_PB9
+  #define I2C_SCL_IO_AF          IO_AF_4
+  #define I2C_SDA_IO_AF          IO_AF_4
+
+  #define I2C_EV_IRQn            I2C1_EV_IRQn
+  #define I2C_ER_IRQn            I2C1_ER_IRQn
+  #define I2C_EV_IRQHandler      I2C1_EV_IRQHandler
+  #define I2C_ER_IRQHandler      I2C1_ER_IRQHandler
 #else
   #error Error in stdstm32-i2c.h, selected I2C1 not supported !
 #endif
@@ -192,6 +204,174 @@ extern "C" {
   #define I2C_BLOCKING_TMO_MS  HAL_MAX_DELAY
 #endif
 
+
+#if defined STM32C5
+//-------------------------------------------------------
+//  C5 (HAL2) interface, LL + LPDMA
+//-------------------------------------------------------
+// C5 ships ST's HAL2, which has no I2C_HandleTypeDef, and its DMA is LPDMA with the request
+// selected per channel instead of through a DMAMUX. So this arm drives the peripheral through
+// the LL directly. The long transfers the display needs go out on LPDMA, everything else is
+// polled. Completion is signalled by the I2C STOP flag, not by the DMA transfer complete: the
+// latter fires when the last byte is handed to TXDR, which is one byte before the bus is idle.
+
+#ifndef I2C_TIMINGR
+  // PCLK1 is 144 MHz and PRESC is only 4 bits, so the finest tick available is /16 = 111.1 ns.
+  // Scaling the 400 kHz column of RM0522 Table 414 onto that tick gives ~396 kHz:
+  // PRESC = 0xF, SCLDEL = 0x4, SDADEL = 0x2, SCLH = 0x04, SCLL = 0x0A
+  #define I2C_TIMINGR              0xF042040AUL
+#endif
+
+#ifndef I2C_LPDMA_CHANNEL
+  #define I2C_LPDMA_CHANNEL        LPDMA1_CH0
+  #define I2C_LPDMA_PERIPH         LL_AHB1_GRP1_PERIPH_LPDMA1
+  #define I2C_LPDMA_REQUEST_TX     LL_LPDMA1_REQUEST_I2C1_TX
+#endif
+
+uint8_t i2c_dev_adr;
+static volatile uint8_t _i2c_busy;
+
+
+// the transfer is one write: the register/control byte, then len data bytes, STOP by AUTOEND.
+// TXIS is set as soon as the START is launched and TXDR is empty, so writing the first byte
+// here does not wait on the bus, and the DMA supplies the rest.
+static HAL_StatusTypeDef _i2c_put_dma(uint8_t reg_adr, uint8_t* buf, uint16_t len)
+{
+    if (_i2c_busy) return HAL_BUSY;
+    _i2c_busy = 1;
+
+    LL_DMA_SetSrcAddress(I2C_LPDMA_CHANNEL, (uint32_t)buf);
+    LL_DMA_SetBlkDataLength(I2C_LPDMA_CHANNEL, len);
+    LL_DMA_EnableChannel(I2C_LPDMA_CHANNEL);
+
+    LL_I2C_HandleTransfer(I2C_I2Cx, i2c_dev_adr << 1, LL_I2C_ADDRSLAVE_7BIT, len + 1,
+                          LL_I2C_MODE_AUTOEND, LL_I2C_GENERATE_START_WRITE);
+    while (!LL_I2C_IsActiveFlag_TXIS(I2C_I2Cx)) {}
+    LL_I2C_TransmitData8(I2C_I2Cx, reg_adr);
+    LL_I2C_EnableDMAReq_TX(I2C_I2Cx);
+
+    return HAL_OK;
+}
+
+
+static HAL_StatusTypeDef _i2c_put_blocked(uint8_t* reg_adr, uint8_t* buf, uint16_t len)
+{
+    uint16_t total = len + (reg_adr ? 1 : 0);
+
+    if (_i2c_busy) return HAL_BUSY;
+
+    LL_I2C_HandleTransfer(I2C_I2Cx, i2c_dev_adr << 1, LL_I2C_ADDRSLAVE_7BIT, total,
+                          LL_I2C_MODE_AUTOEND, LL_I2C_GENERATE_START_WRITE);
+
+    if (reg_adr) {
+        while (!LL_I2C_IsActiveFlag_TXIS(I2C_I2Cx)) {
+            if (LL_I2C_IsActiveFlag_NACK(I2C_I2Cx)) { LL_I2C_ClearFlag_NACK(I2C_I2Cx); return HAL_ERROR; }
+        }
+        LL_I2C_TransmitData8(I2C_I2Cx, *reg_adr);
+    }
+    for (uint16_t i = 0; i < len; i++) {
+        while (!LL_I2C_IsActiveFlag_TXIS(I2C_I2Cx)) {
+            if (LL_I2C_IsActiveFlag_NACK(I2C_I2Cx)) { LL_I2C_ClearFlag_NACK(I2C_I2Cx); return HAL_ERROR; }
+        }
+        LL_I2C_TransmitData8(I2C_I2Cx, buf[i]);
+    }
+
+    while (!LL_I2C_IsActiveFlag_STOP(I2C_I2Cx)) {}
+    LL_I2C_ClearFlag_STOP(I2C_I2Cx);
+    return HAL_OK;
+}
+
+
+void i2c_setdeviceadr(uint8_t dev_adr) { i2c_dev_adr = dev_adr; }
+uint8_t i2c_getdeviceadr(void) { return i2c_dev_adr; }
+
+
+HAL_StatusTypeDef i2c_put_blocked(uint8_t reg_adr, uint8_t* buf, uint16_t len)
+{
+    return _i2c_put_blocked(&reg_adr, buf, len);
+}
+
+
+HAL_StatusTypeDef i2c_put_buf_blocked(uint8_t* buf, uint16_t len)
+{
+    return _i2c_put_blocked(NULL, buf, len);
+}
+
+
+HAL_StatusTypeDef i2c_put(uint8_t reg_adr, uint8_t* buf, uint16_t len)
+{
+    return _i2c_put_dma(reg_adr, buf, len);
+}
+
+
+HAL_StatusTypeDef i2c_put_buf(uint8_t* buf, uint16_t len)
+{
+    return _i2c_put_blocked(NULL, buf, len);
+}
+
+
+// reads are not used by any C5 target so far, the display is write only
+HAL_StatusTypeDef i2c_get_blocked(uint8_t reg_adr, uint8_t* buf, uint16_t len) { return HAL_ERROR; }
+HAL_StatusTypeDef i2c_get(uint8_t reg_adr, uint8_t* buf, uint16_t len) { return HAL_ERROR; }
+
+
+// HAL_BUSY while a transfer is in flight, which is what gdisp_update_completed() polls on.
+// Otherwise probe the address, so that the display detection at startup still works.
+HAL_StatusTypeDef i2c_device_ready(void)
+{
+    if (_i2c_busy) return HAL_BUSY;
+
+    LL_I2C_HandleTransfer(I2C_I2Cx, i2c_dev_adr << 1, LL_I2C_ADDRSLAVE_7BIT, 0,
+                          LL_I2C_MODE_AUTOEND, LL_I2C_GENERATE_START_WRITE);
+    while (!LL_I2C_IsActiveFlag_STOP(I2C_I2Cx)) {}
+    LL_I2C_ClearFlag_STOP(I2C_I2Cx);
+
+    if (LL_I2C_IsActiveFlag_NACK(I2C_I2Cx)) { LL_I2C_ClearFlag_NACK(I2C_I2Cx); return HAL_ERROR; }
+    return HAL_OK;
+}
+
+
+void I2C_EV_IRQHandler(void)
+{
+    if (LL_I2C_IsActiveFlag_STOP(I2C_I2Cx)) {
+        LL_I2C_ClearFlag_STOP(I2C_I2Cx);
+        LL_I2C_DisableDMAReq_TX(I2C_I2Cx);
+        LL_DMA_DisableChannel(I2C_LPDMA_CHANNEL);
+        _i2c_busy = 0;
+    }
+}
+
+
+void i2c_init(void)
+{
+    i2c_dev_adr = 0;
+    _i2c_busy = 0;
+
+    rcc_init_afio();
+    gpio_init_af(I2C_SCL_IO, IO_MODE_OUTPUT_ALTERNATE_OD, I2C_SCL_IO_AF, IO_SPEED_FAST);
+    gpio_init_af(I2C_SDA_IO, IO_MODE_OUTPUT_ALTERNATE_OD, I2C_SDA_IO_AF, IO_SPEED_FAST);
+
+    LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_I2C1);
+
+    LL_I2C_Disable(I2C_I2Cx);
+    LL_I2C_SetTiming(I2C_I2Cx, I2C_TIMINGR);
+    LL_I2C_Enable(I2C_I2Cx);
+
+    // the LPDMA channel keeps its configuration, only source and length change per transfer
+    LL_AHB1_GRP1_EnableClock(I2C_LPDMA_PERIPH);
+    LL_DMA_SetPeriphRequest(I2C_LPDMA_CHANNEL, I2C_LPDMA_REQUEST_TX);
+    LL_DMA_SetDataTransferDirection(I2C_LPDMA_CHANNEL, LL_DMA_DIRECTION_MEMORY_TO_PERIPH);
+    LL_DMA_SetSrcIncMode(I2C_LPDMA_CHANNEL, LL_DMA_SRC_ADDR_INCREMENTED);
+    LL_DMA_SetDestIncMode(I2C_LPDMA_CHANNEL, LL_DMA_DEST_ADDR_FIXED);
+    LL_DMA_SetSrcDataWidth(I2C_LPDMA_CHANNEL, LL_DMA_SRC_DATA_WIDTH_BYTE);
+    LL_DMA_SetDestDataWidth(I2C_LPDMA_CHANNEL, LL_DMA_DEST_DATA_WIDTH_BYTE);
+    LL_DMA_SetDestAddress(I2C_LPDMA_CHANNEL, (uint32_t)&(I2C_I2Cx->TXDR));
+
+    LL_I2C_EnableIT_STOP(I2C_I2Cx);
+    nvic_irq_enable_w_priority(I2C_EV_IRQn, I2C_IT_IRQ_PRIORITY);
+}
+
+#else
 
 //-------------------------------------------------------
 //  HAL interface
@@ -570,9 +750,10 @@ void i2c_init(void)
     i2c_dev_adr = 0;
 }
 
+#endif // STM32C5
+
 
 //-------------------------------------------------------
-#endif
 #ifdef __cplusplus
 }
 #endif

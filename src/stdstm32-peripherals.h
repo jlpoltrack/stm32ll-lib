@@ -24,6 +24,12 @@ typedef enum {
   ENABLE = !DISABLE,
 } FunctionalState;
 
+// HAL2 has no HAL_StatusTypeDef, its status enum is hal_status_t with the same members
+typedef hal_status_t HAL_StatusTypeDef;
+#ifndef HAL_MAX_DELAY
+#define HAL_MAX_DELAY  0xFFFFFFFFU
+#endif
+
 // the register access macros were all renamed with an STM32_ prefix
 #ifndef SET_BIT
 #define SET_BIT(REG, BIT)       STM32_SET_BIT(REG, BIT)

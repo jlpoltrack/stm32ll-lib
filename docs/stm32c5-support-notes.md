@@ -61,15 +61,35 @@ Existing lib's `rcc_init_uart` used `LL_APB1_GRP2_EnableClock(LL_APB1_GRP2_PERIP
 
 C5 AF table: `PA2 = LPUART1_RX` (AF3), `PA3 = LPUART1_TX` (AF3). Opposite of G4/WL convention. Workaround inside the existing `UART$_USE_LPUART1_PA2PA3` arm: `#undef UART$_TX_IO` and `UART$_RX_IO` after the default G4-style assignment, then re-`#define` swapped (TX=PA3, RX=PA2) and set AF to `IO_AF_3`.
 
-### 2.5 ADC, DAC and I2C are out of scope
+### 2.5 ADC and I2C are in, DAC is still out
 
-These three were added in an earlier cut of this work and have been **reverted to their
-pre-C5 state**; `src/stdstm32-{adc,dac,i2c}.h` are byte-identical to `main`. Anyone adding
-them back should know the C5 IP differs substantially from G4: ADC and DAC are v2 IP with no
-`LL_ADC_Init` / `LL_DAC_Init` (individual setters instead), ADC needs a new
-`LL_ADC_SetChannelPreselection()` step, ADC+DAC share one RCC clock selector
-(`LL_RCC_SetADCDACClockSource`), and I2C timing values must come from CubeMX2 for the actual
-PCLK1 rather than being hardcoded.
+ADC and I2C were out of scope in the first cut and have since been added, for the mLRS OLED
+and 5-way switch on the WeAct C552 board. DAC is still reverted to its pre-C5 state. Every
+warning in the original note turned out to be real:
+
+- **No `LL_ADC_Init` / `LL_ADC_REG_Init` / `LL_ADC_CommonInit`.** Those live in the `_ll_*.c`
+  files that HAL2 does not ship, so `adc_init_one_channel()` has a separate C5 arm built from
+  the individual setters. There is no data alignment setter either, C5 data is always right
+  aligned.
+- **`LL_ADC_SetChannelPreselection()` is mandatory.** PCSEL drives the analog switch inside the
+  I/O, and RM0522 21.4.11 requires it for every channel placed in the sequencer. Miss it and
+  the input simply reads nothing.
+- **ADC+DAC share `LL_RCC_SetADCDACClockSource`,** and there is no prescaler inside the ADC.
+  fADC is specified as 8..36 MHz, while HCLK and PSIS are both 144 MHz, so the kernel clock has
+  to be picked to already be in range. `adc_init_begin()` runs the ADC from PSIK at /4.5 =
+  32 MHz, which keeps it locked to the HSE crystal. Anything else wanting PSIK must agree.
+- **Constants were renamed:** `LL_ADC_IN_SINGLE_ENDED` (not `LL_ADC_SINGLE_ENDED`), and the
+  sampling time ladder is 3/5/8/13/25/48/139/289 cycles.
+- **I2C timing is not hardcoded from another family.** `I2C_TIMINGR` defaults to `0xF042040A`,
+  derived from the 400 kHz column of RM0522 Table 414 rescaled to a 144 MHz PCLK1: PRESC is
+  4 bits so the finest tick is /16 = 111.1 ns, giving ~396 kHz rather than exactly 400. Override
+  `I2C_TIMINGR` per target if a different kernel clock or speed is wanted.
+
+The C5 I2C arm is LL only. HAL2 has no `I2C_HandleTypeDef` and no DMAMUX, so none of the
+classic HAL/DMA path survives — see 2.9. Long transfers go out on LPDMA, and completion is
+taken from the I2C STOP flag rather than the DMA transfer-complete flag, which fires one byte
+early because it only means the last byte reached TXDR. Reads are stubbed out, nothing needs
+them yet.
 
 ### 2.6 EEPROM uses LL primitives (HAL diverged too far)
 
@@ -118,6 +138,15 @@ PA11/PA12**.
 ### 2.9 DMA architecture changed
 
 C5 has `LPDMA1` / `LPDMA2` (low-power DMA), no classic `DMA1` / `DMA2`, no `DMAMUX`. The existing lib's `rcc_init_dma` self-gates via `#if defined(DMA1)` so it compiles to nothing on C5 — harmless.
+
+Note that this is not the same as "C5 has no DMA". Both LPDMAs are full masters on the AHB
+matrix (RM0522 Table 1), both list I2C/SPI/USART hardware requests, and RM0522 2.2.3 states
+SRAM1 and SRAM2 "can be addressed both by CPU and DMAs" — so there is no restricted-access
+limitation like U5's LPDMA, and DMA buffers need no special linker placement. What changed is
+the programming model: it is the U5/H5-style channel API (`LL_DMA_ConfigAddresses`,
+`LL_DMA_SetBlkDataLength`, `LL_DMA_SetPeriphRequest`, `LL_DMA_EnableChannel`) with the request
+selected per channel instead of through a DMAMUX. The I2C arm uses it single-shot; none of the
+linked-list machinery is needed.
 
 ### 2.10 C531KC peripheral subset
 

@@ -21,7 +21,7 @@ extern "C" {
 
 
 // only F1, G4, F7, WL, F0 supported currently
-#if defined STM32F1 || defined STM32G4 || defined STM32F7 || defined STM32WL || defined STM32F0
+#if defined STM32F1 || defined STM32G4 || defined STM32F7 || defined STM32WL || defined STM32F0 || defined STM32C5
 
 #if defined ADC_USE_DMA && (defined STM32WL || defined STM32F0)
   #error DMA not supported for STM32WL!
@@ -43,6 +43,8 @@ extern "C" {
     #define ADC_SAMPLINGTIME    LL_ADC_SAMPLINGTIME_160CYCLES_5
   #elif defined STM32F0
     #define ADC_SAMPLINGTIME    LL_ADC_SAMPLINGTIME_239CYCLES_5
+  #elif defined STM32C5
+    #define ADC_SAMPLINGTIME    LL_ADC_SAMPLINGTIME_289CYCLES // longest C5 offers
   #endif
 #endif
 
@@ -79,6 +81,21 @@ void _adc_ADC_SelfCalibrate(ADC_TypeDef* ADCx) {}
 //-------------------------------------------------------
 
 void adc_init_one_channel(ADC_TypeDef* ADCx)
+#if defined STM32C5
+{
+    // C5's LL is header only: it has no LL_ADC_Init()/LL_ADC_REG_Init() and no init structs,
+    // so the same settings are applied one setter at a time. There is no data alignment
+    // setter either, C5 conversion data is always right aligned.
+    LL_ADC_SetResolution(ADCx, LL_ADC_RESOLUTION_12B);
+    LL_ADC_SetLowPowerMode(ADCx, LL_ADC_LP_MODE_NONE);
+
+    LL_ADC_REG_SetTriggerSource(ADCx, LL_ADC_REG_TRIG_SOFTWARE);
+    LL_ADC_REG_SetSequencerLength(ADCx, LL_ADC_REG_SEQ_SCAN_DISABLE);
+    LL_ADC_REG_SetSequencerDiscont(ADCx, LL_ADC_REG_SEQ_DISCONT_DISABLE);
+    LL_ADC_REG_SetContinuousMode(ADCx, LL_ADC_REG_CONV_CONTINUOUS);
+    LL_ADC_REG_SetOverrun(ADCx, LL_ADC_REG_OVR_DATA_OVERWRITTEN);
+}
+#else
 {
 LL_ADC_InitTypeDef ADC_InitStruct = {};
 LL_ADC_REG_InitTypeDef ADC_REG_InitStruct = {};
@@ -128,6 +145,7 @@ LL_ADC_CommonInitTypeDef ADC_CommonInitStruct = {};
 #endif
     LL_ADC_REG_Init(ADCx, &ADC_REG_InitStruct);
 }
+#endif
 
 
 #ifdef ADC_USE_DMA
@@ -233,7 +251,7 @@ void adc_config_channel(ADC_TypeDef* ADCx, uint32_t Rank, uint32_t Channel, GPIO
     LL_ADC_ClearFlag_CCRDY(ADCx);
 #endif
 
-#if defined STM32F1 || defined STM32G4 || defined STM32F7
+#if defined STM32F1 || defined STM32G4 || defined STM32F7 || defined STM32C5
     LL_ADC_SetChannelSamplingTime(ADCx, Channel, ADC_SAMPLINGTIME);
 #elif defined STM32F0
     LL_ADC_SetSamplingTimeCommonChannels(ADCx, ADC_SAMPLINGTIME);
@@ -243,6 +261,12 @@ void adc_config_channel(ADC_TypeDef* ADCx, uint32_t Rank, uint32_t Channel, GPIO
 
 #ifdef STM32G4
     LL_ADC_SetChannelSingleDiff(ADCx, Channel, LL_ADC_SINGLE_ENDED);
+#endif
+#ifdef STM32C5
+    LL_ADC_SetChannelSingleDiff(ADCx, Channel, LL_ADC_IN_SINGLE_ENDED); // C5 renamed the constant
+    // C5 only: PCSEL drives the analog switch in the I/O, and RM0522 21.4.11 requires it to be
+    // set in advance for every channel put into the sequencer. Without it the input reads nothing.
+    LL_ADC_SetChannelPreselection(ADCx, Channel);
 #endif
 
     gpio_init(GPIOx, GPIO_Pin, IO_MODE_INPUT_ANALOG, IO_SPEED_DEFAULT);
@@ -270,6 +294,16 @@ void adc_init_begin(ADC_TypeDef* ADCx)
 #ifdef STM32G4
     LL_RCC_SetADCClockSource(LL_RCC_ADC12_CLKSOURCE_SYSCLK);
 #endif
+#ifdef STM32C5
+    // C5 has no prescaler in the ADC, so its kernel clock must already be within the
+    // 8..36 MHz the datasheet allows for fADC. HCLK and PSIS are both 144 MHz here, so
+    // the ADC is run from PSIK, the PSI's kernel output, divided down to 32 MHz. That
+    // keeps it locked to the HSE crystal. Nothing else uses PSIK on this part.
+    LL_RCC_PSIK_SetDivider(LL_RCC_PSIK_DIV_4_5); // 144 MHz / 4.5 = 32 MHz
+    LL_RCC_PSIK_Enable();
+    while (!LL_RCC_PSIK_IsReady()) {}
+    LL_RCC_SetADCDACClockSource(LL_RCC_ADCDAC_CLKSOURCE_PSIK);
+#endif
     rcc_init_afio();
     rcc_init_adc(ADCx);
 }
@@ -277,7 +311,7 @@ void adc_init_begin(ADC_TypeDef* ADCx)
 
 void adc_enable(ADC_TypeDef* ADCx)
 {
-#if defined STM32G4
+#if defined STM32G4 || defined STM32C5
     LL_ADC_SetGainCompensation(ADCx, 0);
     LL_ADC_SetOverSamplingScope(ADCx, LL_ADC_OVS_DISABLE);
     LL_ADC_DisableDeepPowerDown(ADCx);
@@ -290,7 +324,7 @@ void adc_enable(ADC_TypeDef* ADCx)
     //LL_ADC_SetTriggerFrequencyMode(ADCx, LL_ADC_TRIGGER_FREQ_HIGH);
 #endif
 
-#if defined STM32G4 || defined STM32WL
+#if defined STM32G4 || defined STM32WL || defined STM32C5
     LL_ADC_EnableInternalRegulator(ADCx);
     uint32_t wait_loop_index;
     wait_loop_index = ((LL_ADC_DELAY_INTERNAL_REGUL_STAB_US * (SystemCoreClock / (100000 * 2))) / 10);
@@ -317,13 +351,13 @@ void adc_start_conversion(ADC_TypeDef* ADCx)
 {
 #if defined STM32F1 || defined STM32F7
     LL_ADC_REG_StartConversionSWStart(ADCx);
-#elif defined STM32G4 || defined STM32WL || defined STM32F0
+#elif defined STM32G4 || defined STM32WL || defined STM32F0 || defined STM32C5
     LL_ADC_REG_StartConversion(ADCx);
 #endif
 }
 
 
-#endif // defined STM32F1 || defined STM32G4 || defined STM32F7 || defined STM32F0
+#endif // defined STM32F1 || defined STM32G4 || defined STM32F7 || defined STM32F0 || defined STM32C5
 
 //-------------------------------------------------------
 #ifdef __cplusplus
