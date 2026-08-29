@@ -46,9 +46,17 @@ extern "C" {
   #error NO EE_START_PAGE specified!
 #endif
 
-#if defined STM32G4 || defined STM32L4 || defined STM32WL || defined STM32C5
+#if defined STM32G4 || defined STM32L4 || defined STM32WL
   #ifndef EE_USE_DOUBLEWORD
-    #define EE_USE_DOUBLEWORD // G4/L4/WL/C5 must use DOUBLEWORD
+    #define EE_USE_DOUBLEWORD // G4/L4/WL must use DOUBLEWORD
+  #endif
+#endif
+
+#if defined STM32C5
+  #undef EE_USE_WORD
+  #undef EE_USE_DOUBLEWORD
+  #ifndef EE_USE_QUADWORD
+    #define EE_USE_QUADWORD
   #endif
 #endif
 
@@ -148,6 +156,19 @@ uint8_t nbiterations = 0;
 #endif
 
 
+#if defined STM32C5
+// C5 flash ops poll BSY|WBNE|DBNE. Never spin on them unbounded: a half filled write buffer
+// keeps WBNE set forever, which would hang the firmware before it shows any sign of life.
+static bool _flash_c5_wait_ready(void)
+{
+    for (uint32_t tmo = 0; tmo < 4000000; tmo++) {
+        if (!LL_FLASH_IsActiveFlag(FLASH, LL_FLASH_FLAG_STATUS_ALL)) return true;
+    }
+    return false;
+}
+#endif
+
+
 FLASH_STATUS_ENUM FLASH_ErasePage(uint32_t Page_Address, uint32_t Page_No)
 {
 #if defined STM32F1
@@ -223,14 +244,14 @@ uint32_t bank = (Page_No >= FLASH_PAGE_NB) ? LL_FLASH_ERASE_BANK_2 : LL_FLASH_ER
 uint32_t page_in_bank = Page_No % FLASH_PAGE_NB;
 
     // wait for any pending operation (BSY | WBNE | DBNE)
-    while (LL_FLASH_IsActiveFlag(FLASH, LL_FLASH_FLAG_STATUS_ALL)) {}
+    if (!_flash_c5_wait_ready()) return FLASH_STATUS_TIMEOUT;
     // clear stale EOP and all error flags
     LL_FLASH_ClearFlag_EOP(FLASH);
     LL_FLASH_ClearFlag(FLASH, LL_FLASH_FLAG_ERRORS_ALL);
     // start page erase (area=0 for main flash)
     LL_FLASH_StartErasePage(FLASH, bank, 0U, page_in_bank);
     // wait for erase to complete (BSY | WBNE | DBNE)
-    while (LL_FLASH_IsActiveFlag(FLASH, LL_FLASH_FLAG_STATUS_ALL)) {}
+    if (!_flash_c5_wait_ready()) { LL_FLASH_DisablePageErase(FLASH); return FLASH_STATUS_TIMEOUT; }
     // clear PER so it does not persist into the next programming op
     LL_FLASH_DisablePageErase(FLASH);
     if (LL_FLASH_IsActiveFlag(FLASH, LL_FLASH_FLAG_ERRORS_ALL)) return FLASH_STATUS_ERROR_WRP;
@@ -260,22 +281,8 @@ FLASH_STATUS_ENUM FLASH_ProgramDoubleWord(uint32_t Address, uint64_t Data)
 #elif defined STM32F3 || defined STM32F7 || defined STM32G4 || defined STM32L4 || defined STM32WL || defined STM32F0
     return (HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD, Address, Data) == HAL_OK) ? FLASH_STATUS_COMPLETE : FLASH_STATUS_TIMEOUT;
 #elif defined STM32C5
-// C5 HAL uses a handle-based API incompatible with the legacy HAL_FLASH_Program() call.
-// use LL layer: wait, clear flags, set PG bit, write two 32-bit words, wait, clear PG.
-    // wait for any in-flight flash op to settle (BSY | WBNE | DBNE)
-    while (LL_FLASH_IsActiveFlag(FLASH, LL_FLASH_FLAG_STATUS_ALL)) {}
-    // clear stale EOP and all error flags
-    LL_FLASH_ClearFlag_EOP(FLASH);
-    LL_FLASH_ClearFlag(FLASH, LL_FLASH_FLAG_ERRORS_ALL);
-    LL_FLASH_EnableProgramming(FLASH);
-    *(__IO uint32_t*)Address = (uint32_t)(Data);
-    *(__IO uint32_t*)(Address + 4U) = (uint32_t)(Data >> 32U);
-    // wait for completion (BSY | WBNE | DBNE)
-    while (LL_FLASH_IsActiveFlag(FLASH, LL_FLASH_FLAG_STATUS_ALL)) {}
-    LL_FLASH_DisableProgramming(FLASH);
-    if (LL_FLASH_IsActiveFlag(FLASH, LL_FLASH_FLAG_ERRORS_ALL)) return FLASH_STATUS_ERROR_PG;
-    LL_FLASH_ClearFlag_EOP(FLASH);
-    return FLASH_STATUS_COMPLETE;
+    (void)Address; (void)Data;
+    return FLASH_STATUS_ERROR_PG; // C5 main flash is quad-word only, see EE_USE_QUADWORD above
 #endif
 }
 
@@ -285,9 +292,33 @@ FLASH_STATUS_ENUM FLASH_ProgramDoubleWord(uint32_t Address, uint64_t Data)
 // pData must point to 4 consecutive uint32_t (128 bit), and Address must be 16 byte aligned
 FLASH_STATUS_ENUM FLASH_ProgramQuadWord(uint32_t Address, const uint32_t* pData)
 {
-    // no family in this branch uses quad-word programming
+#if defined STM32C5
+// the C5 HAL is handle-based and incompatible with the legacy HAL_FLASH_Program() call, so go
+// through the LL: wait, clear flags, set PG, write the four words, wait, clear PG.
+uint32_t primask;
+
+    // wait for any in-flight flash op to settle (BSY | WBNE | DBNE)
+    if (!_flash_c5_wait_ready()) return FLASH_STATUS_TIMEOUT;
+    // clear stale EOP and all error flags
+    LL_FLASH_ClearFlag_EOP(FLASH);
+    LL_FLASH_ClearFlag(FLASH, LL_FLASH_FLAG_ERRORS_ALL);
+    LL_FLASH_EnableProgramming(FLASH);
+    // a full 128 bit line fills the write buffer, which starts the write on its own, so no
+    // FW is needed here. The four writes must not be interrupted, as ST's own driver does it.
+    primask = __get_PRIMASK();
+    __disable_irq();
+    for (uint8_t i = 0; i < 4; i++) *(__IO uint32_t*)(Address + 4U*i) = pData[i];
+    __set_PRIMASK(primask);
+    // wait for completion (BSY | WBNE | DBNE)
+    if (!_flash_c5_wait_ready()) { LL_FLASH_DisableProgramming(FLASH); return FLASH_STATUS_TIMEOUT; }
+    LL_FLASH_DisableProgramming(FLASH);
+    if (LL_FLASH_IsActiveFlag(FLASH, LL_FLASH_FLAG_ERRORS_ALL)) return FLASH_STATUS_ERROR_PG;
+    LL_FLASH_ClearFlag_EOP(FLASH);
+    return FLASH_STATUS_COMPLETE;
+#else
     (void)Address; (void)pData;
     return FLASH_STATUS_ERROR_PG;
+#endif
 }
 
 #endif
@@ -308,10 +339,9 @@ static uint32_t _ee_icache_was_enabled;
 void ee_hal_unlock(void)
 {
 #if defined ICACHE
-    // clearing EN also starts a full cache invalidate, see the ICACHE chapter of the RM
+    // the flash and the OTP/UID area are cacheable, so the cache goes off across a flash op
     _ee_icache_was_enabled = READ_BIT(ICACHE->CR, ICACHE_CR_EN);
     if (_ee_icache_was_enabled) {
-        WRITE_REG(ICACHE->FCR, ICACHE_FCR_CBSYENDF);
         CLEAR_BIT(ICACHE->CR, ICACHE_CR_EN);
         while (READ_BIT(ICACHE->CR, ICACHE_CR_EN) != 0U) {}
     }
@@ -339,12 +369,17 @@ void ee_hal_lock(void)
 #endif
 
 #if defined ICACHE
-    // wait for the invalidate started by the disable to finish before re-enabling,
-    // else early accesses are treated as noncacheable
+    // the cache now holds stale lines for whatever was just written, so re-enable it and run
+    // an explicit invalidate. BSYENDF is raised by the CACHEINV operation only - clearing EN
+    // alone never sets it, so it must not be waited on before the invalidate is launched.
     if (_ee_icache_was_enabled) {
-        while (READ_BIT(ICACHE->SR, ICACHE_SR_BSYENDF) == 0U) {}
         WRITE_REG(ICACHE->FCR, ICACHE_FCR_CBSYENDF);
         SET_BIT(ICACHE->CR, ICACHE_CR_EN);
+        SET_BIT(ICACHE->CR, ICACHE_CR_CACHEINV);
+        for (uint32_t tmo = 0; tmo < 1000000; tmo++) { // bounded, the cache is bypassed until done
+            if (READ_BIT(ICACHE->SR, ICACHE_SR_BSYENDF) != 0U) break;
+        }
+        WRITE_REG(ICACHE->FCR, ICACHE_FCR_CBSYENDF);
     }
 #endif
 }
