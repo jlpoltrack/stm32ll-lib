@@ -296,13 +296,13 @@ void adc_init_begin(ADC_TypeDef* ADCx)
 #endif
 #ifdef STM32C5
     // C5 has no prescaler in the ADC, so its kernel clock must already be within the
-    // 8..36 MHz the datasheet allows for fADC. HCLK and PSIS are both 144 MHz here, so
-    // the ADC is run from PSIK, the PSI's kernel output, divided down to 32 MHz. That
-    // keeps it locked to the HSE crystal. Nothing else uses PSIK on this part.
-    LL_RCC_PSIK_SetDivider(LL_RCC_PSIK_DIV_4_5); // 144 MHz / 4.5 = 32 MHz
-    LL_RCC_PSIK_Enable();
-    while (!LL_RCC_PSIK_IsReady()) {}
-    LL_RCC_SetADCDACClockSource(LL_RCC_ADCDAC_CLKSOURCE_PSIK);
+    // 8..36 MHz the datasheet allows for fADC, hence the divided kernel output at 32 MHz.
+    // Not PSIK: its divider belongs to the FDCAN kernel clock (see stdstm32-can.h), and
+    // both peripherals writing the one PSIKDIV field would fight over it, last one wins.
+    LL_RCC_HSIK_SetDivider(LL_RCC_HSIK_DIV_4_5); // HSI 144 MHz / 4.5 = 32 MHz
+    LL_RCC_HSIK_Enable();
+    while (!LL_RCC_HSIK_IsReady()) {}
+    LL_RCC_SetADCDACClockSource(LL_RCC_ADCDAC_CLKSOURCE_HSIK);
 #endif
     rcc_init_afio();
     rcc_init_adc(ADCx);
