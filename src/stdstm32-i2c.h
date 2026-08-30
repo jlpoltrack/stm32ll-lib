@@ -217,9 +217,9 @@ extern "C" {
 
 #ifndef I2C_TIMINGR
   // PCLK1 is 144 MHz and PRESC is only 4 bits, so the finest tick available is /16 = 111.1 ns.
-  // Scaling the 400 kHz column of RM0522 Table 414 onto that tick gives ~396 kHz:
-  // PRESC = 0xF, SCLDEL = 0x4, SDADEL = 0x2, SCLH = 0x04, SCLL = 0x0A
-  #define I2C_TIMINGR              0xF042040AUL
+  // SCL period = (SCLL+1 + SCLH+1) ticks, so 14 + 7 = 21 ticks = 2.33 us, ~390 kHz once the
+  // rise times are added: PRESC = 0xF, SCLDEL = 0x4, SDADEL = 0x2, SCLH = 0x06, SCLL = 0x0D
+  #define I2C_TIMINGR              0xF042060DUL
 #endif
 
 #ifndef I2C_LPDMA_CHANNEL
@@ -228,8 +228,31 @@ extern "C" {
   #define I2C_LPDMA_REQUEST_TX     LL_LPDMA1_REQUEST_I2C1_TX
 #endif
 
+// a wedged bus (no pull-ups, no module, a slave holding SCL) must not hang the firmware,
+// so every wait here is bounded. ~1e6 iterations is far longer than any byte at 400 kHz.
+#ifndef I2C_SPIN_TMO
+  #define I2C_SPIN_TMO             1000000UL
+#endif
+
+#define I2C_WAIT_FOR(cond) \
+    ({ uint32_t _tmo = I2C_SPIN_TMO; while (!(cond)) { if (!--_tmo) break; } _tmo != 0; })
+
+// NBYTES in CR2 is only 8 bits, so anything longer than 255 bytes has to be sent in chunks
+// with RELOAD set and NBYTES reloaded on each TCR. The display pushes 1025 bytes per frame.
+#define I2C_NBYTES_MAX           255
+
 uint8_t i2c_dev_adr;
 static volatile uint8_t _i2c_busy;
+static volatile uint16_t _i2c_remaining; // bytes still to send after the chunk in flight
+
+
+// bring the peripheral back to a defined state after a timeout, PE = 0 also releases the pins
+static void _i2c_reset(void)
+{
+    LL_I2C_Disable(I2C_I2Cx);
+    for (volatile uint32_t i = 0; i < 100; i++) {}
+    LL_I2C_Enable(I2C_I2Cx);
+}
 
 
 // the transfer is one write: the register/control byte, then len data bytes, STOP by AUTOEND.
@@ -244,9 +267,20 @@ static HAL_StatusTypeDef _i2c_put_dma(uint8_t reg_adr, uint8_t* buf, uint16_t le
     LL_DMA_SetBlkDataLength(I2C_LPDMA_CHANNEL, len);
     LL_DMA_EnableChannel(I2C_LPDMA_CHANNEL);
 
-    LL_I2C_HandleTransfer(I2C_I2Cx, i2c_dev_adr << 1, LL_I2C_ADDRSLAVE_7BIT, len + 1,
-                          LL_I2C_MODE_AUTOEND, LL_I2C_GENERATE_START_WRITE);
-    while (!LL_I2C_IsActiveFlag_TXIS(I2C_I2Cx)) {}
+    uint32_t total = (uint32_t)len + 1;
+    uint32_t chunk = (total > I2C_NBYTES_MAX) ? I2C_NBYTES_MAX : total;
+    _i2c_remaining = total - chunk;
+
+    LL_I2C_HandleTransfer(I2C_I2Cx, i2c_dev_adr << 1, LL_I2C_ADDRSLAVE_7BIT, chunk,
+                          _i2c_remaining ? LL_I2C_MODE_RELOAD : LL_I2C_MODE_AUTOEND,
+                          LL_I2C_GENERATE_START_WRITE);
+    if (!I2C_WAIT_FOR(LL_I2C_IsActiveFlag_TXIS(I2C_I2Cx) || LL_I2C_IsActiveFlag_NACK(I2C_I2Cx))
+        || LL_I2C_IsActiveFlag_NACK(I2C_I2Cx)) {
+        LL_DMA_DisableChannel(I2C_LPDMA_CHANNEL);
+        _i2c_reset();
+        _i2c_busy = 0;
+        return HAL_ERROR;
+    }
     LL_I2C_TransmitData8(I2C_I2Cx, reg_adr);
     LL_I2C_EnableDMAReq_TX(I2C_I2Cx);
 
@@ -256,27 +290,38 @@ static HAL_StatusTypeDef _i2c_put_dma(uint8_t reg_adr, uint8_t* buf, uint16_t le
 
 static HAL_StatusTypeDef _i2c_put_blocked(uint8_t* reg_adr, uint8_t* buf, uint16_t len)
 {
-    uint16_t total = len + (reg_adr ? 1 : 0);
+    uint32_t total = (uint32_t)len + (reg_adr ? 1 : 0);
+    uint32_t chunk = (total > I2C_NBYTES_MAX) ? I2C_NBYTES_MAX : total;
+    uint32_t remaining = total - chunk;
 
     if (_i2c_busy) return HAL_BUSY;
 
-    LL_I2C_HandleTransfer(I2C_I2Cx, i2c_dev_adr << 1, LL_I2C_ADDRSLAVE_7BIT, total,
-                          LL_I2C_MODE_AUTOEND, LL_I2C_GENERATE_START_WRITE);
+    LL_I2C_HandleTransfer(I2C_I2Cx, i2c_dev_adr << 1, LL_I2C_ADDRSLAVE_7BIT, chunk,
+                          remaining ? LL_I2C_MODE_RELOAD : LL_I2C_MODE_AUTOEND,
+                          LL_I2C_GENERATE_START_WRITE);
 
     if (reg_adr) {
-        while (!LL_I2C_IsActiveFlag_TXIS(I2C_I2Cx)) {
-            if (LL_I2C_IsActiveFlag_NACK(I2C_I2Cx)) { LL_I2C_ClearFlag_NACK(I2C_I2Cx); return HAL_ERROR; }
-        }
+        if (!I2C_WAIT_FOR(LL_I2C_IsActiveFlag_TXIS(I2C_I2Cx) || LL_I2C_IsActiveFlag_NACK(I2C_I2Cx))
+            || LL_I2C_IsActiveFlag_NACK(I2C_I2Cx)) { _i2c_reset(); return HAL_ERROR; }
         LL_I2C_TransmitData8(I2C_I2Cx, *reg_adr);
+        chunk--;
     }
     for (uint16_t i = 0; i < len; i++) {
-        while (!LL_I2C_IsActiveFlag_TXIS(I2C_I2Cx)) {
-            if (LL_I2C_IsActiveFlag_NACK(I2C_I2Cx)) { LL_I2C_ClearFlag_NACK(I2C_I2Cx); return HAL_ERROR; }
+        if (chunk == 0) { // chunk exhausted, TCR is up, hand the peripheral the next NBYTES
+            if (!I2C_WAIT_FOR(LL_I2C_IsActiveFlag_TCR(I2C_I2Cx))) { _i2c_reset(); return HAL_ERROR; }
+            chunk = (remaining > I2C_NBYTES_MAX) ? I2C_NBYTES_MAX : remaining;
+            remaining -= chunk;
+            LL_I2C_HandleTransfer(I2C_I2Cx, i2c_dev_adr << 1, LL_I2C_ADDRSLAVE_7BIT, chunk,
+                                  remaining ? LL_I2C_MODE_RELOAD : LL_I2C_MODE_AUTOEND,
+                                  LL_I2C_GENERATE_NOSTARTSTOP);
         }
+        if (!I2C_WAIT_FOR(LL_I2C_IsActiveFlag_TXIS(I2C_I2Cx) || LL_I2C_IsActiveFlag_NACK(I2C_I2Cx))
+            || LL_I2C_IsActiveFlag_NACK(I2C_I2Cx)) { _i2c_reset(); return HAL_ERROR; }
         LL_I2C_TransmitData8(I2C_I2Cx, buf[i]);
+        chunk--;
     }
 
-    while (!LL_I2C_IsActiveFlag_STOP(I2C_I2Cx)) {}
+    if (!I2C_WAIT_FOR(LL_I2C_IsActiveFlag_STOP(I2C_I2Cx))) { _i2c_reset(); return HAL_ERROR; }
     LL_I2C_ClearFlag_STOP(I2C_I2Cx);
     return HAL_OK;
 }
@@ -321,9 +366,11 @@ HAL_StatusTypeDef i2c_device_ready(void)
 {
     if (_i2c_busy) return HAL_BUSY;
 
+    if (LL_I2C_IsActiveFlag_BUSY(I2C_I2Cx)) return HAL_ERROR; // bus wedged, no point starting
+
     LL_I2C_HandleTransfer(I2C_I2Cx, i2c_dev_adr << 1, LL_I2C_ADDRSLAVE_7BIT, 0,
                           LL_I2C_MODE_AUTOEND, LL_I2C_GENERATE_START_WRITE);
-    while (!LL_I2C_IsActiveFlag_STOP(I2C_I2Cx)) {}
+    if (!I2C_WAIT_FOR(LL_I2C_IsActiveFlag_STOP(I2C_I2Cx))) { _i2c_reset(); return HAL_ERROR; }
     LL_I2C_ClearFlag_STOP(I2C_I2Cx);
 
     if (LL_I2C_IsActiveFlag_NACK(I2C_I2Cx)) { LL_I2C_ClearFlag_NACK(I2C_I2Cx); return HAL_ERROR; }
@@ -333,6 +380,16 @@ HAL_StatusTypeDef i2c_device_ready(void)
 
 void I2C_EV_IRQHandler(void)
 {
+    // TCR means the current NBYTES chunk is done and the peripheral is stretching SCL until
+    // the next one is programmed. The DMA keeps feeding TXDR across the chunk boundary.
+    if (LL_I2C_IsActiveFlag_TCR(I2C_I2Cx)) {
+        uint32_t chunk = (_i2c_remaining > I2C_NBYTES_MAX) ? I2C_NBYTES_MAX : _i2c_remaining;
+        _i2c_remaining -= chunk;
+        LL_I2C_HandleTransfer(I2C_I2Cx, i2c_dev_adr << 1, LL_I2C_ADDRSLAVE_7BIT, chunk,
+                              _i2c_remaining ? LL_I2C_MODE_RELOAD : LL_I2C_MODE_AUTOEND,
+                              LL_I2C_GENERATE_NOSTARTSTOP);
+    }
+
     if (LL_I2C_IsActiveFlag_STOP(I2C_I2Cx)) {
         LL_I2C_ClearFlag_STOP(I2C_I2Cx);
         LL_I2C_DisableDMAReq_TX(I2C_I2Cx);
@@ -348,6 +405,17 @@ void i2c_init(void)
     _i2c_busy = 0;
 
     rcc_init_afio();
+
+    // if a slave was reset mid-byte it can hold SDA low forever, so clock the bus free first
+    gpio_init(I2C_SCL_IO, IO_MODE_OUTPUT_OD_HIGH, IO_SPEED_FAST);
+    gpio_init(I2C_SDA_IO, IO_MODE_INPUT_PU, IO_SPEED_FAST);
+    for (uint8_t i = 0; i < 9 && !gpio_read_activehigh(I2C_SDA_IO); i++) {
+        gpio_low(I2C_SCL_IO);
+        for (volatile uint32_t k = 0; k < 200; k++) {}
+        gpio_high(I2C_SCL_IO);
+        for (volatile uint32_t k = 0; k < 200; k++) {}
+    }
+
     gpio_init_af(I2C_SCL_IO, IO_MODE_OUTPUT_ALTERNATE_OD, I2C_SCL_IO_AF, IO_SPEED_FAST);
     gpio_init_af(I2C_SDA_IO, IO_MODE_OUTPUT_ALTERNATE_OD, I2C_SDA_IO_AF, IO_SPEED_FAST);
 
@@ -368,6 +436,7 @@ void i2c_init(void)
     LL_DMA_SetDestAddress(I2C_LPDMA_CHANNEL, (uint32_t)&(I2C_I2Cx->TXDR));
 
     LL_I2C_EnableIT_STOP(I2C_I2Cx);
+    LL_I2C_EnableIT_TC(I2C_I2Cx); // TCIE covers TCR, which the >255 byte chunking needs
     nvic_irq_enable_w_priority(I2C_EV_IRQn, I2C_IT_IRQ_PRIORITY);
 }
 
