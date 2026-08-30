@@ -306,13 +306,32 @@ void adc_init_begin(ADC_TypeDef* ADCx)
 #endif
     rcc_init_afio();
     rcc_init_adc(ADCx);
+
+#ifdef STM32C5
+    // The C5's ADC comes out of reset in deep power down, where its registers do not keep
+    // what is written to them. All of the config below (CFGR, SQR, SMPR and above all PCSEL,
+    // which closes the analog switch in the pad) would be lost, and every conversion returns
+    // 0 no matter what the pin sits at. So leave deep power down and bring the internal
+    // regulator up here, before the first config write, as ST's own HAL does.
+    LL_ADC_DisableDeepPowerDown(ADCx);
+    LL_ADC_EnableInternalRegulator(ADCx);
+    uint32_t wait_loop_index = ((LL_ADC_DELAY_INTERNAL_REGUL_STAB_US * (SystemCoreClock / (100000 * 2))) / 10);
+    while (wait_loop_index != 0) { wait_loop_index--; }
+#endif
 }
 
 
 void adc_enable(ADC_TypeDef* ADCx)
 {
 #if defined STM32G4 || defined STM32C5
+#ifdef STM32C5
+    // On C5, 0 does NOT mean "off": the LL sets GCOMPCOEFF = 0 and turns GCOMP on, and the ADC
+    // then computes DATA = raw * coeff / 4096, i.e. every conversion result is 0. Unity gain,
+    // and the only value that clears the GCOMP bit again, is LL_ADC_GAIN_COMPENSATION_DIV.
+    LL_ADC_SetGainCompensation(ADCx, LL_ADC_GAIN_COMPENSATION_DIV);
+#else
     LL_ADC_SetGainCompensation(ADCx, 0);
+#endif
     LL_ADC_SetOverSamplingScope(ADCx, LL_ADC_OVS_DISABLE);
     LL_ADC_DisableDeepPowerDown(ADCx);
 #elif defined STM32WL
@@ -331,7 +350,15 @@ void adc_enable(ADC_TypeDef* ADCx)
     while (wait_loop_index != 0) { wait_loop_index--; }
 #endif
 
-#ifndef STM32F0
+#if defined STM32C5
+    LL_ADC_ClearFlag_ADRDY(ADCx);
+    LL_ADC_Enable(ADCx);
+    // ADSTART is ignored while ADRDY is 0, so wait for it. ADEN can also be cleared again by
+    // the calibration logic, ST's HAL keeps re-asserting it until ADRDY comes up.
+    while (!LL_ADC_IsActiveFlag_ADRDY(ADCx)) {
+        if (!LL_ADC_IsEnabled(ADCx)) LL_ADC_Enable(ADCx);
+    }
+#elif !defined STM32F0
     LL_ADC_Enable(ADCx);
 #else
     // ADC enable sequence from datasheet
