@@ -308,6 +308,18 @@ void adc_init_begin(ADC_TypeDef* ADCx)
     rcc_init_adc(ADCx);
 
 #ifdef STM32C5
+    // Re-init safe: init_hw() runs again on a soft restart, and the ADC is then still enabled
+    // and converting. ADEN cannot be set on an already enabled ADC and the config registers
+    // are read only while a conversion is ongoing, so bring it down first.
+    if (LL_ADC_IsEnabled(ADCx)) {
+        if (LL_ADC_REG_IsConversionOngoing(ADCx)) {
+            LL_ADC_REG_StopConversion(ADCx);
+            for (uint32_t tmo = 0; tmo < 1000000; tmo++) { if (!LL_ADC_REG_IsStopConversionOngoing(ADCx)) break; }
+        }
+        LL_ADC_Disable(ADCx);
+        for (uint32_t tmo = 0; tmo < 1000000; tmo++) { if (!LL_ADC_IsDisableOngoing(ADCx)) break; }
+    }
+
     // The C5's ADC comes out of reset in deep power down, where its registers do not keep
     // what is written to them. All of the config below (CFGR, SQR, SMPR and above all PCSEL,
     // which closes the analog switch in the pad) would be lost, and every conversion returns
@@ -355,7 +367,10 @@ void adc_enable(ADC_TypeDef* ADCx)
     LL_ADC_Enable(ADCx);
     // ADSTART is ignored while ADRDY is 0, so wait for it. ADEN can also be cleared again by
     // the calibration logic, ST's HAL keeps re-asserting it until ADRDY comes up.
-    while (!LL_ADC_IsActiveFlag_ADRDY(ADCx)) {
+    // bounded: an ADC that never comes ready must not take the whole firmware down with it,
+    // this runs from init_hw() with the interrupts off
+    for (uint32_t tmo = 0; tmo < 1000000; tmo++) {
+        if (LL_ADC_IsActiveFlag_ADRDY(ADCx)) break;
         if (!LL_ADC_IsEnabled(ADCx)) LL_ADC_Enable(ADCx);
     }
 #elif !defined STM32F0
