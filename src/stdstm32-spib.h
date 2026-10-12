@@ -8,7 +8,9 @@
 //*******************************************************
 // Interface:
 //
-// #define SPIB_USE_SPI1, SPIB_USE_SPI2, SPIB_USE_SPI3, SPIB_USE_SUBGHZSPI
+// #define SPIB_USE_SPI1, SPIB_USE_SPI1_PB3PB4PB5, SPIB_USE_SPI2, SPIB_USE_SPI3, SPIB_USE_SPI3_PB3PB4PB5, SPIB_USE_SUBGHZSPI
+// #define SPIB_USE_SCK_IO, SPIB_USE_MISO_IO, SPIB_USE_MOSI_IO, SPIB_USE_IO_AF
+// #define SPIB_USE_SCK_IO_AF, SPIB_USE_MISO_IO_AF, SPIB_USE_MOSI_IO_AF // only if the pins differ in AF
 // #define SPIB_USE_DMA
 // #define SPIB_DMA_PRIORITY
 //
@@ -110,7 +112,9 @@ typedef enum {
   #elif defined STM32WL
   #elif defined STM32F0
   #elif defined STM32C5
-    // C5: PA5/PA6/PA7 and PB3/PB4/PB5 are both AF5, same as the default above
+    // C5: PA5/PA6/PA7 and PB3/PB4/PB5 are both AF5, same as the default above.
+    // SPI1 pins up to LQFP64 (DS14928 Table 13), select others with SPIB_USE_SCK_IO etc.:
+    //   SCK: PA5 AF5, PB3 AF5    MISO: PA6 AF5, PB4 AF5    MOSI: PA7 AF5, PB5 AF5, PB15 AF6
   #endif
 #endif
 #ifdef SPIB_USE_SPI2
@@ -130,10 +134,14 @@ typedef enum {
   #elif defined STM32WL
   #elif defined STM32F0
   #elif defined STM32C5
-    // C5: PB13 SCK / PB14 MISO / PB15 MOSI are AF5, same as the default above
+    // C5: PB13 SCK / PB14 MISO / PB15 MOSI are AF5, same as the default above.
+    // SPI2 pins up to LQFP64 (DS14928 Table 13), select others with SPIB_USE_SCK_IO etc.:
+    //   SCK:  PA9 AF5, PA12 AF5, PB10 AF5, PB13 AF5, PA5 AF6, PB2 AF6
+    //   MISO: PB14 AF5, PC2 AF5, PA7 AF6
+    //   MOSI: PB15 AF5, PC1 AF5, PC3 AF5, PA8 AF6
   #endif
 #endif
-#ifdef SPIB_USE_SPI3
+#if defined SPIB_USE_SPI3 || defined SPIB_USE_SPI3_PB3PB4PB5
   #define SPIB_SPIx                SPI3
   #define SPIB_SCK_IO              IO_PB3
   #define SPIB_MISO_IO             IO_PB4
@@ -150,20 +158,28 @@ typedef enum {
   #elif defined STM32WL || defined STM32F0
     #error SPI3 NOT AVAILABLE !
   #elif defined STM32C5
-    // C5 SPI3 is AF6, but PB5 is SPI3_MOSI on AF7. as one AF is used for all three pins,
-    // the whole set moves to PC10/PC11/PC12, which is AF6 throughout and bonded up to LQFP64.
+    // SPI3 pins up to LQFP64 (DS14928 Table 13), select others with SPIB_USE_SCK_IO etc.:
+    //   SCK:  PB3 AF6, PB7 AF6, PB9 AF6, PC10 AF6, PB1 AF4, PE2 AF5
+    //   MISO: PB4 AF6, PB6 AF6, PC11 AF6, PB0 AF5, PE5 AF5 (PE5 only on the alternative LQFP64 pinout)
+    //   MOSI: PC12 AF6, PA3 AF6, PB2 AF7, PB5 AF7, PB15 AF7, PA4 AF4
+    // the default is PC10/PC11/PC12, the one set with a single AF, but it needs 64 pins.
+    // PB3/PB4/PB5 is there on every package, with PB5 on its own AF.
     // the C5 parts without SPI3 are caught by the CMSIS presence macro.
     #if !defined SPI3
       #error SPI3 NOT AVAILABLE !
     #else
-      #undef SPIB_SCK_IO
-      #undef SPIB_MISO_IO
-      #undef SPIB_MOSI_IO
       #undef SPIB_IO_AF
-      #define SPIB_SCK_IO          IO_PC10
-      #define SPIB_MISO_IO         IO_PC11
-      #define SPIB_MOSI_IO         IO_PC12
       #define SPIB_IO_AF           IO_AF_6
+      #if defined SPIB_USE_SPI3_PB3PB4PB5
+        #define SPIB_MOSI_IO_AF    IO_AF_7
+      #else
+        #undef SPIB_SCK_IO
+        #undef SPIB_MISO_IO
+        #undef SPIB_MOSI_IO
+        #define SPIB_SCK_IO        IO_PC10
+        #define SPIB_MISO_IO       IO_PC11
+        #define SPIB_MOSI_IO       IO_PC12
+      #endif
     #endif
   #endif
 #endif
@@ -194,6 +210,30 @@ typedef enum {
 #ifdef SPIB_USE_IO_AF
   #undef SPIB_IO_AF
   #define SPIB_IO_AF               SPIB_USE_IO_AF
+  #undef SPIB_MOSI_IO_AF // a user AF is meant for all three pins
+#endif
+
+// per pin AF, for the mappings where the three pins do not share one
+#ifdef SPIB_USE_SCK_IO_AF
+  #undef SPIB_SCK_IO_AF
+  #define SPIB_SCK_IO_AF           SPIB_USE_SCK_IO_AF
+#endif
+#ifdef SPIB_USE_MISO_IO_AF
+  #undef SPIB_MISO_IO_AF
+  #define SPIB_MISO_IO_AF          SPIB_USE_MISO_IO_AF
+#endif
+#ifdef SPIB_USE_MOSI_IO_AF
+  #undef SPIB_MOSI_IO_AF
+  #define SPIB_MOSI_IO_AF          SPIB_USE_MOSI_IO_AF
+#endif
+#ifndef SPIB_SCK_IO_AF
+  #define SPIB_SCK_IO_AF           SPIB_IO_AF
+#endif
+#ifndef SPIB_MISO_IO_AF
+  #define SPIB_MISO_IO_AF          SPIB_IO_AF
+#endif
+#ifndef SPIB_MOSI_IO_AF
+  #define SPIB_MOSI_IO_AF          SPIB_IO_AF
 #endif
 
 
@@ -216,12 +256,23 @@ typedef enum {
 //  SPI low level routines
 //-------------------------------------------------------
 
+#if defined STM32C5
+// SPI v2: stop the endless master transfer before SPE is cleared. SUSP only comes up for a
+// transfer that was started, so skip the wait when there is none, and bound it otherwise.
+static inline void _spib_suspend(void)
+{
+  if (!LL_SPI_IsEnabled(SPIB_SPIx) || !LL_SPI_IsActiveMasterTransfer(SPIB_SPIx)) return;
+  LL_SPI_SuspendMasterTransfer(SPIB_SPIx);
+  for (uint32_t tmo = 0; tmo < 100000; tmo++) { if (LL_SPI_IsActiveFlag_SUSP(SPIB_SPIx)) break; }
+  LL_SPI_ClearFlag_SUSP(SPIB_SPIx);
+}
+#endif
+
+
 void spib_disable(void)
 {
 #if defined STM32C5
-  // SPI v2: stop the continuous master transfer cleanly before disabling
-  LL_SPI_SuspendMasterTransfer(SPIB_SPIx);
-  while (!LL_SPI_IsActiveFlag_SUSP(SPIB_SPIx)) {};
+  _spib_suspend();
   LL_SPI_Disable(SPIB_SPIx);
 #else
   // according to reference manual
@@ -525,9 +576,7 @@ uint32_t _spib_baudrate(SPICLOCKSPEEDENUM speed)
 void spib_setmode(SPIMODEENUM mode)
 {
 #if defined STM32C5
-  // SPI v2: suspend continuous master transfer before disabling
-  LL_SPI_SuspendMasterTransfer(SPIB_SPIx);
-  while (!LL_SPI_IsActiveFlag_SUSP(SPIB_SPIx)) {};
+  _spib_suspend();
 #endif
   LL_SPI_Disable(SPIB_SPIx); // is important to do that
 
@@ -608,7 +657,7 @@ LL_SPI_InitTypeDef SPI_InitStruct = {};
 #ifdef SPIB_USE_SPI1_PB3PB4PB5
   LL_GPIO_AF_EnableRemap_SPI1();
 #endif
-#ifdef SPIB_USE_SPI3
+#if defined SPIB_USE_SPI3 || defined SPIB_USE_SPI3_PB3PB4PB5
   LL_GPIO_AF_Remap_SWJ_NOJTAG();
 #endif
 #endif
@@ -622,9 +671,9 @@ LL_SPI_InitTypeDef SPI_InitStruct = {};
 #endif
 
   // Configure pin SCK MOSI as alternative function push-pull, pin MISO as input with pull up
-  gpio_init_af(SPIB_SCK_IO, IO_MODE_OUTPUT_ALTERNATE_PP, SPIB_IO_AF, IO_SPEED_VERYFAST);
-  gpio_init_af(SPIB_MOSI_IO, IO_MODE_OUTPUT_ALTERNATE_PP, SPIB_IO_AF, IO_SPEED_VERYFAST);
-  gpio_init_af(SPIB_MISO_IO, IO_MODE_INPUT_PU, SPIB_IO_AF, IO_SPEED_VERYFAST);
+  gpio_init_af(SPIB_SCK_IO, IO_MODE_OUTPUT_ALTERNATE_PP, SPIB_SCK_IO_AF, IO_SPEED_VERYFAST);
+  gpio_init_af(SPIB_MOSI_IO, IO_MODE_OUTPUT_ALTERNATE_PP, SPIB_MOSI_IO_AF, IO_SPEED_VERYFAST);
+  gpio_init_af(SPIB_MISO_IO, IO_MODE_INPUT_PU, SPIB_MISO_IO_AF, IO_SPEED_VERYFAST);
 
 #endif // !SPIB_USE_SUBGHZSPI
 

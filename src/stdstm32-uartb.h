@@ -8,15 +8,23 @@
 //*******************************************************
 // Interface:
 //
-// #define UARTB_USE_UART1, UARTB_USE_UART1_PA9PA10, UARTB_USE_UART1_PB6PB7, UARTB_USE_UART1_PC4PC5, UARTB_USE_UART1_PB14PB15
-// #define UARTB_USE_UART2, UARTB_USE_UART2_PA2PA3, UARTB_USE_UART2_PD5PD6, UARTB_USE_UART2_PB3PB4, UARTB_USE_UART2_PA14PA15
-// #define UARTB_USE_UART3, UARTB_USE_UART3_PB10PB11, UARTB_USE_UART3_PC10PC11, UARTB_USE_UART3_PB8PB9
-// #define UARTB_USE_UART4, UARTB_USE_UART4_PC10PC11, UARTB_USE_UART4_PA0PA1
-// #define UARTB_USE_UART5, UARTB_USE_UART5_PC12PD2
+// #define UARTB_USE_UART1, UARTB_USE_UART1_PA9PA10, UARTB_USE_UART1_PB6PB7, UARTB_USE_UART1_PC4PC5, UARTB_USE_UART1_PB14PB15,
+//         UARTB_USE_UART1_PA6PA7, UARTB_USE_UART1_PE4PE3
+// #define UARTB_USE_UART2, UARTB_USE_UART2_PA2PA3, UARTB_USE_UART2_PD5PD6, UARTB_USE_UART2_PB3PB4, UARTB_USE_UART2_PA14PA15,
+//         UARTB_USE_UART2_PB3PA15, UARTB_USE_UART2_PA11PA12
+// #define UARTB_USE_UART3, UARTB_USE_UART3_PB10PB11, UARTB_USE_UART3_PC10PC11, UARTB_USE_UART3_PB8PB9, UARTB_USE_UART3_PB3PB4,
+//         UARTB_USE_UART3_PB10PB1
+// #define UARTB_USE_UART4, UARTB_USE_UART4_PC10PC11, UARTB_USE_UART4_PA0PA1, UARTB_USE_UART4_PB9PB8, UARTB_USE_UART4_PA12PA11
+// #define UARTB_USE_UART5, UARTB_USE_UART5_PC12PD2, UARTB_USE_UART5_PB13PB12, UARTB_USE_UART5_PB6PB5
 // #define UARTB_USE_UART6, UARTB_USE_UART6_PC6PC7, UARTB_USE_UART6_PG14PG9
 // #define UARTB_USE_UART7, UARTB_USE_UART7_PE8PE7, UARTB_USE_UART7_PF7PF6
 // #define UARTB_USE_UART8, UARTB_USE_UART8_PE1PE0
-// #define UARTB_USE_LPUART1, UARTB_USE_LPUART1_PA2PA3, UARTB_USE_LPUART1_PC1PC0, UARTB_USE_LPUART1_PA9PA10, UARTB_USE_LPUART1_PB6PB7
+// #define UARTB_USE_LPUART1, UARTB_USE_LPUART1_PA2PA3, UARTB_USE_LPUART1_PC1PC0, UARTB_USE_LPUART1_PA9PA10, UARTB_USE_LPUART1_PB6PB7,
+//         UARTB_USE_LPUART1_PA3PA2
+// the pin names are in the order TX, RX
+//
+// #define UARTB_USE_TX_IO, UARTB_USE_RX_IO, UARTB_USE_IO_AF
+// #define UARTB_USE_TX_IO_AF, UARTB_USE_RX_IO_AF // only if the two pins differ in AF
 //
 // #define UARTB_BAUD
 //
@@ -247,7 +255,7 @@ typedef enum {
 
 
 #if defined UARTB_USE_UART1 || defined UARTB_USE_UART1_PA9PA10 || defined UARTB_USE_UART1_PB6PB7 || defined UARTB_USE_UART1_PC4PC5 || \
-      defined UARTB_USE_UART1_PB14PB15
+      defined UARTB_USE_UART1_PB14PB15 || defined UARTB_USE_UART1_PA6PA7 || defined UARTB_USE_UART1_PE4PE3
   #define UARTB_UARTx             USART1
   #ifdef UARTB_USE_UART1
     // user needs to specify UARTB_USE_TX_IO, UARTB_USE_RX_IO, and possibly UARTB_USE_IO_AF
@@ -263,6 +271,12 @@ typedef enum {
   #elif defined UARTB_USE_UART1_PB14PB15 // only C5
     #define UARTB_TX_IO           IO_PB14
     #define UARTB_RX_IO           IO_PB15
+  #elif defined UARTB_USE_UART1_PA6PA7 // only C5
+    #define UARTB_TX_IO           IO_PA6
+    #define UARTB_RX_IO           IO_PA7
+  #elif defined UARTB_USE_UART1_PE4PE3 // only C5, and only on the alternative LQFP64 pinout
+    #define UARTB_TX_IO           IO_PE4
+    #define UARTB_RX_IO           IO_PE3
   #endif
   #ifndef STM32F0
     #define UARTB_IO_AF           IO_AF_7
@@ -286,9 +300,11 @@ typedef enum {
   #elif defined STM32L4
   #elif defined STM32WL
   #elif defined STM32C5
-    // C5: PA9/PA10 and PB6/PB7 are AF7 as set above, PB14/PB15 are AF4. the AF4 is
+    // USART1 pins up to LQFP64 (DS14928 Table 13). AF7 as set above, but for PB14/PB15:
+    //   TX: PA6 AF7, PA9 AF7, PB6 AF7, PE4 AF7, PB14 AF4, PA15 AF11
+    //   RX: PA7 AF7, PA10 AF7, PB7 AF7, PE3 AF7, PB15 AF4
     // datasheet-verified on C551/C552/C562, and assumed to hold for the smaller parts.
-    // PC4/PC5 is not a USART1 mapping on C5, it is USART3_RX.
+    // PC4/PC5 is not a USART1 mapping on C5, PC4 is USART3_RX.
     #if defined UARTB_USE_UART1_PC4PC5
       #error UARTB_USE_UART1_PC4PC5 not available on STM32C5 !
     #elif defined UARTB_USE_UART1_PB14PB15
@@ -299,7 +315,7 @@ typedef enum {
 
 #elif defined UARTB_USE_UART2 || defined UARTB_USE_UART2_PA2PA3 || defined UARTB_USE_UART2_PD5PD6 || \
       defined UARTB_USE_UART2_PB3PB4 || defined UARTB_USE_UART2_PA14PA15 || defined UARTB_USE_UART2_PB3PA15 || \
-      defined UARTB_USE_UART2_PA5PA15
+      defined UARTB_USE_UART2_PA11PA12
   #define UARTB_UARTx             USART2
   #ifdef UARTB_USE_UART2
     // user needs to specify UARTB_USE_TX_IO, UARTB_USE_RX_IO, and possibly UARTB_USE_IO_AF
@@ -318,6 +334,9 @@ typedef enum {
   #elif defined UARTB_USE_UART2_PB3PA15 // only G4
     #define UARTB_TX_IO           IO_PB3
     #define UARTB_RX_IO           IO_PA15
+  #elif defined UARTB_USE_UART2_PA11PA12 // only C5 // ATTENTION: these are the USB pins
+    #define UARTB_TX_IO           IO_PA11
+    #define UARTB_RX_IO           IO_PA12
   #endif
   #ifndef STM32F0
     #define UARTB_IO_AF           IO_AF_7
@@ -339,18 +358,23 @@ typedef enum {
   #elif defined STM32L4
   #elif defined STM32WL
   #elif defined STM32C5
-    // C5 has USART2 only on PA2/PA3 (AF7, as set above) and PD5/PD6, and PD5/PD6 is not
-    // bonded up to LQFP64. PB3/PB4 and PB3/PA15 are USART3 pins on C5, not USART2.
+    // USART2 pins up to LQFP64 (DS14928 Table 13). AF7 as set above, but for PA11/PA12:
+    //   TX: PA2 AF7, PB0 AF7, PA11 AF4    RX: PA3 AF7, PA12 AF4
+    // PD5/PD6 is a USART2 mapping too, but is not bonded up to LQFP64.
+    // PB3/PB4 are USART3 pins on C5, not USART2.
     #if defined UARTB_USE_UART2_PD5PD6
       #error UARTB_USE_UART2_PD5PD6 not bonded on STM32C5 packages up to LQFP64 ! use UARTB_USE_UART2_PA2PA3
     #elif defined UARTB_USE_UART2_PB3PB4 || defined UARTB_USE_UART2_PA14PA15 || \
           defined UARTB_USE_UART2_PB3PA15
       #error UARTB_USE_UART2 mapping not available on STM32C5 ! use UARTB_USE_UART2_PA2PA3
+    #elif defined UARTB_USE_UART2_PA11PA12
+      #undef UARTB_IO_AF
+      #define UARTB_IO_AF         IO_AF_4
     #endif
   #endif
 
 #elif defined UARTB_USE_UART3 || defined UARTB_USE_UART3_PB10PB11 || defined UARTB_USE_UART3_PC10PC11 || defined UARTB_USE_UART3_PB8PB9 || \
-      defined UARTB_USE_UART3_PA4PA3 || defined UARTB_USE_UART3_PB3PB8
+      defined UARTB_USE_UART3_PB3PB4 || defined UARTB_USE_UART3_PB10PB1
   #define UARTB_UARTx             USART3
   #if defined UARTB_USE_UART3
     // user needs to specify UARTB_USE_TX_IO, UARTB_USE_RX_IO, and possibly UARTB_USE_IO_AF
@@ -363,14 +387,19 @@ typedef enum {
   #elif defined UARTB_USE_UART3_PB8PB9 // only F3
     #define UARTB_TX_IO           IO_PB8
     #define UARTB_RX_IO           IO_PB9
-  #else
+  #elif defined UARTB_USE_UART3_PB3PB4 // only C5 // ATTENTION: PB3, PB4 are JTDO, NJTRST
+    #define UARTB_TX_IO           IO_PB3
+    #define UARTB_RX_IO           IO_PB4
+  #elif defined UARTB_USE_UART3_PB10PB1 // only C5
+    #define UARTB_TX_IO           IO_PB10
+    #define UARTB_RX_IO           IO_PB1
   #endif
   #ifndef STM32F0
     #define UARTB_IO_AF           IO_AF_7
   #else
     #if defined UARTB_USE_UART3
       // user needs to specify UARTB_USE_IO_AF
-    #elif defined defined UARTB_USE_UART3_PB10PB11 || defined UARTB_USE_UART3_PB8PB9
+    #elif defined UARTB_USE_UART3_PB10PB11 || defined UARTB_USE_UART3_PB8PB9
       #define UARTB_IO_AF         IO_AF_4
     #elif defined UARTB_USE_UART3_PC10PC11
       #define UARTB_IO_AF         IO_AF_1
@@ -393,19 +422,24 @@ typedef enum {
     #define UARTB_IRQn            USART3_4_IRQn
     #define UARTB_IRQHandler      USART3_4_IRQHandler
   #elif defined STM32C5
-    // C5 USART3 is AF7 as set above, and only PC10/PC11 is bonded up to LQFP64.
-    // PB3/PB4 is USART3 too, but on AF11, and is not offered as a mapping here.
+    // USART3 pins up to LQFP64 (DS14928 Table 13). AF7 as set above, but for PB3/PB4:
+    //   TX: PB10 AF7, PC10 AF7, PB3 AF11    RX: PB1 AF7, PC4 AF7, PC11 AF7, PB4 AF11
+    // PC4, PC10, PC11 need 64 pins. the C5 has no PB11.
     // the C5 parts without USART3 are caught by the CMSIS presence macro.
     #if !defined USART3
       #error UART3 NOT AVAILABLE !
     #elif defined UARTB_USE_UART3_PB10PB11
-      #error UARTB_USE_UART3_PB10PB11 not available on STM32C5, PB11 is not a USART3 pin ! use UARTB_USE_UART3_PC10PC11
+      #error UARTB_USE_UART3_PB10PB11 not available on STM32C5, it has no PB11 ! use UARTB_USE_UART3_PB10PB1
     #elif defined UARTB_USE_UART3_PB8PB9
       #error UARTB_USE_UART3_PB8PB9 not available on STM32C5 ! use UARTB_USE_UART3_PC10PC11
+    #elif defined UARTB_USE_UART3_PB3PB4
+      #undef UARTB_IO_AF
+      #define UARTB_IO_AF         IO_AF_11
     #endif
   #endif
 
-#elif defined UARTB_USE_UART4 || defined UARTB_USE_UART4_PC10PC11 || defined UARTB_USE_UART4_PA0PA1
+#elif defined UARTB_USE_UART4 || defined UARTB_USE_UART4_PC10PC11 || defined UARTB_USE_UART4_PA0PA1 || \
+      defined UARTB_USE_UART4_PB9PB8 || defined UARTB_USE_UART4_PA12PA11
   #define UARTB_UARTx             UART4
   #ifdef UARTB_USE_UART4
     // user needs to specify UARTB_USE_TX_IO, UARTB_USE_RX_IO, and possibly UARTB_USE_IO_AF
@@ -415,6 +449,12 @@ typedef enum {
   #elif defined UARTB_USE_UART4_PA0PA1 // only F7, C5 // was UART4_REMAPPED
     #define UARTB_TX_IO           IO_PA0
     #define UARTB_RX_IO           IO_PA1
+  #elif defined UARTB_USE_UART4_PB9PB8 // only C5
+    #define UARTB_TX_IO           IO_PB9
+    #define UARTB_RX_IO           IO_PB8
+  #elif defined UARTB_USE_UART4_PA12PA11 // only C5 // ATTENTION: these are the USB pins
+    #define UARTB_TX_IO           IO_PA12
+    #define UARTB_RX_IO           IO_PA11
   #endif
   #if defined STM32F1
     #define UARTB_IO_AF           IO_AF_DEFAULT
@@ -423,7 +463,13 @@ typedef enum {
   #elif defined STM32G4
     #define UARTB_IO_AF           IO_AF_5
   #elif defined STM32C5
-    #define UARTB_IO_AF           IO_AF_8
+    // UART4 pins up to LQFP64 (DS14928 Table 13):
+    //   TX: PA0 AF8, PB9 AF8, PC10 AF8, PA12 AF6    RX: PA1 AF8, PB8 AF8, PC11 AF8, PA11 AF6
+    #if defined UARTB_USE_UART4_PA12PA11
+      #define UARTB_IO_AF         IO_AF_6
+    #else
+      #define UARTB_IO_AF         IO_AF_8
+    #endif
   #endif
   #define UARTB_IRQn              UART4_IRQn
   #define UARTB_IRQHandler        UART4_IRQHandler
@@ -444,13 +490,20 @@ typedef enum {
   #elif defined STM32C5
   #endif
 
-#elif defined UARTB_USE_UART5 || defined UARTB_USE_UART5_PC12PD2
+#elif defined UARTB_USE_UART5 || defined UARTB_USE_UART5_PC12PD2 || defined UARTB_USE_UART5_PB13PB12 || \
+      defined UARTB_USE_UART5_PB6PB5
   #define UARTB_UARTx             UART5
   #ifdef UARTB_USE_UART5
     // user needs to specify UARTB_USE_TX_IO, UARTB_USE_RX_IO, and possibly UARTB_USE_IO_AF
   #elif defined UARTB_USE_UART5_PC12PD2
     #define UARTB_TX_IO           IO_PC12
     #define UARTB_RX_IO           IO_PD2
+  #elif defined UARTB_USE_UART5_PB13PB12 // only C5
+    #define UARTB_TX_IO           IO_PB13
+    #define UARTB_RX_IO           IO_PB12
+  #elif defined UARTB_USE_UART5_PB6PB5 // only C5
+    #define UARTB_TX_IO           IO_PB6
+    #define UARTB_RX_IO           IO_PB5
   #endif
   #define UARTB_IRQn              UART5_IRQn
   #define UARTB_IRQHandler        UART5_IRQHandler
@@ -463,7 +516,13 @@ typedef enum {
   #elif defined STM32G4
     #define UARTB_IO_AF           IO_AF_5
   #elif defined STM32C5
-    #define UARTB_IO_AF           IO_AF_8
+    // UART5 pins up to LQFP64 (DS14928 Table 13). PC12, PD2 need 64 pins:
+    //   TX: PC12 AF8, PB6 AF14, PB13 AF14    RX: PD2 AF8, PB5 AF14, PB12 AF14, PB15 AF14
+    #if defined UARTB_USE_UART5_PB13PB12 || defined UARTB_USE_UART5_PB6PB5
+      #define UARTB_IO_AF         IO_AF_14
+    #else
+      #define UARTB_IO_AF         IO_AF_8
+    #endif
   #elif defined STM32L4
     #error TODO ?!?
   #elif defined STM32WL
@@ -540,7 +599,7 @@ typedef enum {
   #endif
 
 #elif defined UARTB_USE_LPUART1 || defined UARTB_USE_LPUART1_PA2PA3 || defined UARTB_USE_LPUART1_PC1PC0 || \
-      defined UARTB_USE_LPUART1_PA9PA10 || defined UARTB_USE_LPUART1_PB6PB7
+      defined UARTB_USE_LPUART1_PA9PA10 || defined UARTB_USE_LPUART1_PB6PB7 || defined UARTB_USE_LPUART1_PA3PA2
   #define UARTB_UARTx             LPUART1
   #ifdef UARTB_USE_LPUART1
     // user needs to specify UARTB_USE_TX_IO, UARTB_USE_RX_IO, and possibly UARTB_USE_IO_AF
@@ -551,7 +610,8 @@ typedef enum {
       #define UARTB_IO_AF         IO_AF_12 // G4
     #elif defined STM32C5
       // C5 silicon swap: AF table has PA2=LPUART1_RX, PA3=LPUART1_TX (opposite of G4/WL).
-      // override the TX/RX IO assignments above for C5.
+      // override the TX/RX IO assignments above for C5. UARTB_USE_LPUART1_PA3PA2 is the
+      // same mapping under the name that says so.
       #undef UARTB_TX_IO
       #undef UARTB_RX_IO
       #define UARTB_TX_IO         IO_PA3
@@ -572,6 +632,10 @@ typedef enum {
     #define UARTB_TX_IO           IO_PB6
     #define UARTB_RX_IO           IO_PB7
     #define UARTB_IO_AF           IO_AF_8
+  #elif defined UARTB_USE_LPUART1_PA3PA2 // only C5
+    #define UARTB_TX_IO           IO_PA3
+    #define UARTB_RX_IO           IO_PA2
+    #define UARTB_IO_AF           IO_AF_3
   #endif
   #define UARTB_IRQn              LPUART1_IRQn
   #define UARTB_IRQHandler        LPUART1_IRQHandler
@@ -583,8 +647,9 @@ typedef enum {
     #error TODO ?!?
   #elif defined STM32WL
   #elif defined STM32C5
-    // C5 has LPUART1 on PA2/PA3 (AF3, RX/TX swapped, handled above), PA9/PA10 (AF3) and
-    // PB6/PB7 (AF8). PC0/PC1 are bonded up to LQFP64, but carry SPI2, not LPUART1.
+    // LPUART1 pins up to LQFP64 (DS14928 Table 13):
+    //   TX: PA3 AF3, PA9 AF3, PC3 AF3, PB3 AF8, PB6 AF8    RX: PA2 AF3, PA10 AF3, PB7 AF8, PB13 AF8
+    // PC0/PC1 are bonded up to LQFP64, but carry SPI2, not LPUART1.
     #if defined UARTB_USE_LPUART1_PC1PC0
       #error UARTB_USE_LPUART1_PC1PC0 not available on STM32C5, PC0/PC1 are not LPUART1 pins ! use UARTB_USE_LPUART1_PA9PA10 or UARTB_USE_LPUART1_PB6PB7
     #endif
@@ -599,7 +664,7 @@ typedef enum {
 // have to know which one was selected. define it once here rather than repeating the
 // list of LPUART1 mappings at every use.
 #if defined UARTB_USE_LPUART1 || defined UARTB_USE_LPUART1_PA2PA3 || defined UARTB_USE_LPUART1_PC1PC0 || \
-    defined UARTB_USE_LPUART1_PA9PA10 || defined UARTB_USE_LPUART1_PB6PB7
+    defined UARTB_USE_LPUART1_PA9PA10 || defined UARTB_USE_LPUART1_PB6PB7 || defined UARTB_USE_LPUART1_PA3PA2
   #define UARTB_IS_LPUART
 #endif
 
@@ -618,6 +683,18 @@ typedef enum {
   #define UARTB_IO_AF             UARTB_USE_IO_AF
 #endif
 
+// per pin AF, for the pin pairs where TX and RX do not share one
+#ifdef UARTB_USE_TX_IO_AF
+  #define UARTB_TX_IO_AF          UARTB_USE_TX_IO_AF
+#elif defined UARTB_IO_AF
+  #define UARTB_TX_IO_AF          UARTB_IO_AF
+#endif
+#ifdef UARTB_USE_RX_IO_AF
+  #define UARTB_RX_IO_AF          UARTB_USE_RX_IO_AF
+#elif defined UARTB_IO_AF
+  #define UARTB_RX_IO_AF          UARTB_IO_AF
+#endif
+
 
 // catch missing defines, compiler will throw error anyhow, but so it is nicer
 #if defined UARTB_USE_TX && !defined UARTB_TX_IO
@@ -626,7 +703,7 @@ typedef enum {
 #if defined UARTB_USE_RX && !defined UARTB_RX_IO
   #error No UARTB RX IO defined!
 #endif
-#if !defined UARTB_IO_AF
+#if (defined UARTB_USE_TX && !defined UARTB_TX_IO_AF) || (defined UARTB_USE_RX && !defined UARTB_RX_IO_AF)
   #error No UARTB IO AF defined!
 #endif
 
@@ -929,7 +1006,9 @@ LL_LPUART_InitTypeDef UART_InitStruct = {};
   UART_InitStruct.Parity = parity;
   UART_InitStruct.TransferDirection = LL_LPUART_DIRECTION_TX_RX;
   UART_InitStruct.HardwareFlowControl = LL_LPUART_HWCONTROL_NONE;
-  UART_InitStruct.PrescalerValue = LL_LPUART_PRESCALER_DIV1;
+  // BRR = 256 * fck / (prescaler * baud) has 20 bits only, which at DIV1 overflows below
+  // 11.7 kBaud at 48 MHz and below 41.5 kBaud at 170 MHz, so the slow bauds get divided down
+  UART_InitStruct.PrescalerValue = (baud < 50000) ? LL_LPUART_PRESCALER_DIV16 : LL_LPUART_PRESCALER_DIV1;
 
   LL_LPUART_Init(UARTB_UARTx, &UART_InitStruct);
 #endif
@@ -960,7 +1039,7 @@ void uartb_tx_enablepin(FunctionalState flag)
 {
 #ifdef UARTB_USE_TX
   if (flag == ENABLE) {
-    gpio_change_af(UARTB_TX_IO, IO_MODE_OUTPUT_ALTERNATE_PP, UARTB_IO_AF, IO_SPEED_VERYFAST);
+    gpio_change_af(UARTB_TX_IO, IO_MODE_OUTPUT_ALTERNATE_PP, UARTB_TX_IO_AF, IO_SPEED_VERYFAST);
   } else {
     gpio_change(UARTB_TX_IO, IO_MODE_INPUT_ANALOG, IO_SPEED_VERYFAST);
   }
@@ -1009,15 +1088,15 @@ void uartb_init_isroff(void)
 
   // Configure pin USART/LPUART Tx as alternative function push-pull
 #ifdef UARTB_USE_TX
-  gpio_init_af(UARTB_TX_IO, IO_MODE_OUTPUT_ALTERNATE_PP, UARTB_IO_AF, IO_SPEED_VERYFAST);
+  gpio_init_af(UARTB_TX_IO, IO_MODE_OUTPUT_ALTERNATE_PP, UARTB_TX_IO_AF, IO_SPEED_VERYFAST);
 #endif
 
   // Configure pin USART/LPUART Rx as input with pull up
 #ifdef UARTB_USE_RX
 #ifndef UARTB_INVERTED
-  gpio_init_af(UARTB_RX_IO, IO_MODE_INPUT_PU, UARTB_IO_AF, IO_SPEED_VERYFAST);
+  gpio_init_af(UARTB_RX_IO, IO_MODE_INPUT_PU, UARTB_RX_IO_AF, IO_SPEED_VERYFAST);
 #else
-  gpio_init_af(UARTB_RX_IO, IO_MODE_INPUT_PD, UARTB_IO_AF, IO_SPEED_VERYFAST);
+  gpio_init_af(UARTB_RX_IO, IO_MODE_INPUT_PD, UARTB_RX_IO_AF, IO_SPEED_VERYFAST);
 #endif
 #endif
 
