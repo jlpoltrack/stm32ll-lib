@@ -343,7 +343,7 @@ void ee_hal_unlock(void)
     _ee_icache_was_enabled = READ_BIT(ICACHE->CR, ICACHE_CR_EN);
     if (_ee_icache_was_enabled) {
         CLEAR_BIT(ICACHE->CR, ICACHE_CR_EN);
-        while (READ_BIT(ICACHE->CR, ICACHE_CR_EN) != 0U) {}
+        for (uint32_t tmo = 0; tmo < 1000000; tmo++) { if (READ_BIT(ICACHE->CR, ICACHE_CR_EN) == 0U) break; }
     }
 #endif
 
@@ -496,9 +496,11 @@ uint32_t val;
 
 #elif defined EE_USE_QUADWORD
 uint32_t val[4]; // HAL reads the source as uint32_t*, so natural alignment is enough
+uint16_t datalen_bytes;
 
     if (data == NULL) datalen = EE_PAGE_SIZE-16 -16; // -16 to be on the safe side
 
+    datalen_bytes = datalen;
     datalen = (datalen + 15)/16; // adjust datalen to be 128 bit aligned
 
     for (n = 0; n < datalen; n++) {
@@ -506,7 +508,11 @@ uint32_t val[4]; // HAL reads the source as uint32_t*, so natural alignment is e
             adr = FromPageBaseAddress + 16 + 16*n;
             for (uint8_t i = 0; i < 4; i++) val[i] = (*(__IO uint32_t*)(adr + 4*i));
         } else {
-            for (uint8_t i = 0; i < 4; i++) val[i] = ((uint32_t*)data)[4*n + i];
+            // the last quad word is padded with 0xFF, data is not read beyond its end
+            val[0] = val[1] = val[2] = val[3] = (uint32_t)0xFFFFFFFF;
+            for (uint16_t i = 16*n; (i < 16*n + 16) && (i < datalen_bytes); i++) {
+                ((uint8_t*)val)[i - 16*n] = ((uint8_t*)data)[i];
+            }
         }
         if ((val[0] != (uint32_t)0xFFFFFFFF) || (val[1] != (uint32_t)0xFFFFFFFF) ||
             (val[2] != (uint32_t)0xFFFFFFFF) || (val[3] != (uint32_t)0xFFFFFFFF)) {

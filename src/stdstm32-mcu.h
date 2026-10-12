@@ -26,12 +26,10 @@ void mcu_uid(uint8_t uid[STM32_MCU_UID_LEN])
     // error -> HardFault. For this single read at startup it is simpler to read it with
     // the ICACHE off than to add an MPU entry. Done by direct register write so this
     // does not depend on the project pulling in the ll_icache / hal_icache headers.
-    // clearing EN also starts a full cache invalidate, see the ICACHE chapter of the RM
     uint32_t icache_was_enabled = READ_BIT(ICACHE->CR, ICACHE_CR_EN);
     if (icache_was_enabled) {
-        WRITE_REG(ICACHE->FCR, ICACHE_FCR_CBSYENDF);
         CLEAR_BIT(ICACHE->CR, ICACHE_CR_EN);
-        while (READ_BIT(ICACHE->CR, ICACHE_CR_EN) != 0U) {}
+        for (uint32_t tmo = 0; tmo < 1000000; tmo++) { if (READ_BIT(ICACHE->CR, ICACHE_CR_EN) == 0U) break; }
     }
 #endif
 
@@ -40,12 +38,16 @@ void mcu_uid(uint8_t uid[STM32_MCU_UID_LEN])
     memcpy(uid, uid_ptr, STM32_MCU_UID_LEN);
 
 #if defined ICACHE
-    // wait for the invalidate started by the disable to finish before re-enabling,
-    // else early accesses are treated as noncacheable
+    // same sequence as ee_hal_lock(): re-enable and run an explicit invalidate. BSYENDF is
+    // raised by CACHEINV only, never by clearing EN, so it must not be waited on before that.
     if (icache_was_enabled) {
-        while (READ_BIT(ICACHE->SR, ICACHE_SR_BSYENDF) == 0U) {}
         WRITE_REG(ICACHE->FCR, ICACHE_FCR_CBSYENDF);
         SET_BIT(ICACHE->CR, ICACHE_CR_EN);
+        SET_BIT(ICACHE->CR, ICACHE_CR_CACHEINV);
+        for (uint32_t tmo = 0; tmo < 1000000; tmo++) { // bounded, the cache is bypassed until done
+            if (READ_BIT(ICACHE->SR, ICACHE_SR_BSYENDF) != 0U) break;
+        }
+        WRITE_REG(ICACHE->FCR, ICACHE_FCR_CBSYENDF);
     }
 #endif
 }
@@ -134,8 +136,13 @@ void BootLoaderInit(void)
     // select HSI as system clock source
 #if defined STM32C5
     // C5 splits the HSI sysclk entries. HSI/3 = 48 MHz is what the bootloader itself runs on,
-    // see AN2606 Table 23.
+    // see AN2606 Table 23. The switch only takes once the source is ready.
+    LL_RCC_HSIDIV3_Enable();
+    for (uint32_t tmo = 0; tmo < 1000000; tmo++) { if (LL_RCC_HSIDIV3_IsReady()) break; }
     LL_RCC_SetSysClkSource(LL_RCC_SYS_CLKSOURCE_HSIDIV3);
+    for (uint32_t tmo = 0; tmo < 1000000; tmo++) {
+        if (LL_RCC_GetSysClkSource() == LL_RCC_SYS_CLKSOURCE_STATUS_HSIDIV3) break;
+    }
 #else
     LL_RCC_SetSysClkSource(LL_RCC_SYS_CLKSOURCE_HSI); // is done already in LL_RCC_Deinit() !?
 #endif

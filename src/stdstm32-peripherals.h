@@ -203,6 +203,9 @@ void rcc_init_tim(TIM_TypeDef* TIMx)
 #if defined(TIM8)
   if (TIMx == TIM8) { LL_APB2_GRP1_EnableClock(LL_APB2_GRP1_PERIPH_TIM8); }
 #endif
+#if defined(TIM12) && defined STM32C5
+  if (TIMx == TIM12) { LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_TIM12); }
+#endif
 #if defined(TIM15)
   #ifndef STM32F0
   if (TIMx == TIM15) { LL_APB2_GRP1_EnableClock(LL_APB2_GRP1_PERIPH_TIM15); }
@@ -372,6 +375,9 @@ void rcc_init_adc(ADC_TypeDef* ADCx)
 #if defined(ADC1)
   if (ADCx == ADC1) { LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_ADC12); }
 #endif
+#if defined(ADC2)
+  if (ADCx == ADC2) { LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_ADC12); }
+#endif
 
 #endif
 }
@@ -521,6 +527,8 @@ void rcc_init_dma(DMA_TypeDef* DMAx)
 
 #if defined(GPIOH)
 #define IO_PH0   GPIOH, LL_GPIO_PIN_0
+#define IO_PH1   GPIOH, LL_GPIO_PIN_1
+#define IO_PH2   GPIOH, LL_GPIO_PIN_2
 #endif
 
 

@@ -26,6 +26,9 @@ extern "C" {
 #if defined ADC_USE_DMA && (defined STM32WL || defined STM32F0)
   #error DMA not supported for STM32WL!
 #endif
+#if defined ADC_USE_DMA && defined STM32C5
+  #error DMA not supported for STM32C5, its LPDMA needs an own implementation!
+#endif
 
 
 //-------------------------------------------------------
@@ -301,7 +304,7 @@ void adc_init_begin(ADC_TypeDef* ADCx)
     // both peripherals writing the one PSIKDIV field would fight over it, last one wins.
     LL_RCC_HSIK_SetDivider(LL_RCC_HSIK_DIV_4_5); // HSI 144 MHz / 4.5 = 32 MHz
     LL_RCC_HSIK_Enable();
-    while (!LL_RCC_HSIK_IsReady()) {}
+    for (uint32_t tmo = 0; tmo < 1000000; tmo++) { if (LL_RCC_HSIK_IsReady()) break; } // bounded as all waits here
     LL_RCC_SetADCDACClockSource(LL_RCC_ADCDAC_CLKSOURCE_HSIK);
 #endif
     rcc_init_afio();
@@ -355,7 +358,7 @@ void adc_enable(ADC_TypeDef* ADCx)
     //LL_ADC_SetTriggerFrequencyMode(ADCx, LL_ADC_TRIGGER_FREQ_HIGH);
 #endif
 
-#if defined STM32G4 || defined STM32WL || defined STM32C5
+#if defined STM32G4 || defined STM32WL // on C5 the regulator is up since adc_init_begin()
     LL_ADC_EnableInternalRegulator(ADCx);
     uint32_t wait_loop_index;
     wait_loop_index = ((LL_ADC_DELAY_INTERNAL_REGUL_STAB_US * (SystemCoreClock / (100000 * 2))) / 10);
