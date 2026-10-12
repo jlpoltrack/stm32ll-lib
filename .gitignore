@@ -60,3 +60,4 @@ dkms.conf
 /docs/cmsis-device-h5-main/
 /docs/stm32c5xx-drivers-main/
 /docs/*.pdf
+/*.pdf
