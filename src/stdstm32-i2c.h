@@ -10,6 +10,7 @@
 // Interface:
 //
 // #define I2C_USE_I2C1, I2C_USE_I2C2, I2C_USE_I2C3
+// #define I2C_USE_SCL_IO, I2C_USE_SDA_IO, I2C_USE_SCL_IO_AF, I2C_USE_SDA_IO_AF, I2C_USE_IO_AF
 //
 // #define I2C_USE_ITMODE
 // #define I2C_IT_IRQ_PRIORITY // may also be needed for DMA mode !
@@ -88,16 +89,22 @@ extern "C" {
   #define I2C_TX_DMAx_Channely_IRQHandler  DMA1_Channel2_IRQHandler
   #define I2C_RX_DMAx_Channely_IRQHandler  DMA1_Channel1_IRQHandler
 #elif defined STM32C5
-  // PB6/PB7 also carry I2C1 on C5, but are usually taken by LPUART1
+  // I2C1 pins up to LQFP64 (DS14928 Table 13), select others with I2C_USE_SCL_IO etc.:
+  //   SCL: PB6 AF4, PB8 AF4, PH1 AF4, PA8 AF9    SDA: PB7 AF4, PB9 AF4, PH0 AF4, PC9 AF9
+  // PH0/PH1 are the HSE pins, PB6/PB7 are usually taken by a UART
   #define I2C_SCL_IO             IO_PB8
   #define I2C_SDA_IO             IO_PB9
   #define I2C_SCL_IO_AF          IO_AF_4
   #define I2C_SDA_IO_AF          IO_AF_4
 
+  // C5 names the error interrupt ERR, not ER
   #define I2C_EV_IRQn            I2C1_EV_IRQn
-  #define I2C_ER_IRQn            I2C1_ER_IRQn
+  #define I2C_ER_IRQn            I2C1_ERR_IRQn
   #define I2C_EV_IRQHandler      I2C1_EV_IRQHandler
-  #define I2C_ER_IRQHandler      I2C1_ER_IRQHandler
+  #define I2C_ER_IRQHandler      I2C1_ERR_IRQHandler
+
+  #define I2C_C5_RCC_PERIPH      LL_APB1_GRP1_PERIPH_I2C1
+  #define I2C_C5_LPDMA_REQUEST   LL_LPDMA1_REQUEST_I2C1_TX
 #else
   #error Error in stdstm32-i2c.h, selected I2C1 not supported !
 #endif
@@ -138,6 +145,24 @@ extern "C" {
   #define I2C_RX_DMAx_Channely_IRQn        DMA1_Channel4_5_IRQn
   #define I2C_TX_DMAx_Channely_IRQHandler  DMA1_Channel4_5_IRQHandler
   #define I2C_RX_DMAx_Channely_IRQHandler  DMA1_Channel4_5_IRQHandler
+#elif defined STM32C5
+#if defined I2C_USE_I2C2
+  // I2C2 pins up to LQFP64 (DS14928 Table 13), select others with I2C_USE_SCL_IO etc.:
+  //   SCL: PB10 AF4, PA11 AF8, PB3 AF9    SDA: PB12 AF4, PB3 AF4, PA12 AF8, PB4 AF9
+  #define I2C_SCL_IO             IO_PB10
+  #define I2C_SDA_IO             IO_PB12
+  #define I2C_SCL_IO_AF          IO_AF_4
+  #define I2C_SDA_IO_AF          IO_AF_4
+#else
+  #error Error in stdstm32-i2c.h, selected USE_I2C2 not supported !
+#endif
+  #define I2C_EV_IRQn            I2C2_EV_IRQn
+  #define I2C_ER_IRQn            I2C2_ERR_IRQn
+  #define I2C_EV_IRQHandler      I2C2_EV_IRQHandler
+  #define I2C_ER_IRQHandler      I2C2_ERR_IRQHandler
+
+  #define I2C_C5_RCC_PERIPH      LL_APB1_GRP1_PERIPH_I2C2
+  #define I2C_C5_LPDMA_REQUEST   LL_LPDMA1_REQUEST_I2C2_TX
 #else
   #error Error in stdstm32-i2c.h, selected I2C2 not supported !
 #endif
@@ -180,9 +205,19 @@ extern "C" {
   #undef I2C_SDA_IO
   #define I2C_SDA_IO             I2C_USE_SDA_IO
 #endif
-#ifdef I2C_USE_IO_AF
-  #undef I2C_IO_AF
-  #define I2C_IO_AF              I2C_USE_IO_AF
+#ifdef I2C_USE_IO_AF // one AF for both pins
+  #undef I2C_SCL_IO_AF
+  #undef I2C_SDA_IO_AF
+  #define I2C_SCL_IO_AF          I2C_USE_IO_AF
+  #define I2C_SDA_IO_AF          I2C_USE_IO_AF
+#endif
+#ifdef I2C_USE_SCL_IO_AF
+  #undef I2C_SCL_IO_AF
+  #define I2C_SCL_IO_AF          I2C_USE_SCL_IO_AF
+#endif
+#ifdef I2C_USE_SDA_IO_AF
+  #undef I2C_SDA_IO_AF
+  #define I2C_SDA_IO_AF          I2C_USE_SDA_IO_AF
 #endif
 
 
@@ -214,6 +249,9 @@ extern "C" {
 // the LL directly. The long transfers the display needs go out on LPDMA, everything else is
 // polled. Completion is signalled by the I2C STOP flag, not by the DMA transfer complete: the
 // latter fires when the last byte is handed to TXDR, which is one byte before the bus is idle.
+//
+// The I2C interrupts are enabled only while a DMA transfer is in flight. The polled paths wait
+// on the very same STOP and TCR flags, and an ISR that is live would clear them first.
 
 #ifndef I2C_TIMINGR
   // PCLK1 is 144 MHz and PRESC is only 4 bits, so the finest tick available is /16 = 111.1 ns.
@@ -225,13 +263,21 @@ extern "C" {
 #ifndef I2C_LPDMA_CHANNEL
   #define I2C_LPDMA_CHANNEL        LPDMA1_CH0
   #define I2C_LPDMA_PERIPH         LL_AHB1_GRP1_PERIPH_LPDMA1
-  #define I2C_LPDMA_REQUEST_TX     LL_LPDMA1_REQUEST_I2C1_TX
+#endif
+#ifndef I2C_LPDMA_REQUEST_TX
+  #define I2C_LPDMA_REQUEST_TX     I2C_C5_LPDMA_REQUEST // same number on LPDMA1 and LPDMA2
 #endif
 
 // a wedged bus (no pull-ups, no module, a slave holding SCL) must not hang the firmware,
 // so every wait here is bounded. ~1e6 iterations is far longer than any byte at 400 kHz.
 #ifndef I2C_SPIN_TMO
   #define I2C_SPIN_TMO             1000000UL
+#endif
+
+// SCL held low for longer than this ends a DMA transfer with an error, as no STOP will come.
+// tTIMEOUT = (TIMEOUTA + 1) * 2048 * tI2CCLK, so 0xFFF is 58 ms at 144 MHz
+#ifndef I2C_SCL_LOW_TMO
+  #define I2C_SCL_LOW_TMO          0xFFFUL
 #endif
 
 #define I2C_WAIT_FOR(cond) \
@@ -247,6 +293,7 @@ static volatile uint16_t _i2c_remaining; // bytes still to send after the chunk 
 
 
 // bring the peripheral back to a defined state after a timeout, PE = 0 also releases the pins
+// and clears every status flag, a byte left over in TXDR included
 static void _i2c_reset(void)
 {
     LL_I2C_Disable(I2C_I2Cx);
@@ -255,46 +302,33 @@ static void _i2c_reset(void)
 }
 
 
-// the transfer is one write: the register/control byte, then len data bytes, STOP by AUTOEND.
-// TXIS is set as soon as the START is launched and TXDR is empty, so writing the first byte
-// here does not wait on the bus, and the DMA supplies the rest.
-static HAL_StatusTypeDef _i2c_put_dma(uint8_t reg_adr, uint8_t* buf, uint16_t len)
+static void _i2c_clear_errors(void)
 {
-    if (_i2c_busy) return HAL_BUSY;
-    _i2c_busy = 1;
+    LL_I2C_ClearFlag_BERR(I2C_I2Cx);
+    LL_I2C_ClearFlag_ARLO(I2C_I2Cx);
+    LL_I2C_ClearSMBusFlag_TIMEOUT(I2C_I2Cx);
+}
 
-    LL_DMA_SetSrcAddress(I2C_LPDMA_CHANNEL, (uint32_t)buf);
-    LL_DMA_SetBlkDataLength(I2C_LPDMA_CHANNEL, len);
-    LL_DMA_EnableChannel(I2C_LPDMA_CHANNEL);
 
-    uint32_t total = (uint32_t)len + 1;
-    uint32_t chunk = (total > I2C_NBYTES_MAX) ? I2C_NBYTES_MAX : total;
-    _i2c_remaining = total - chunk;
-
-    LL_I2C_HandleTransfer(I2C_I2Cx, i2c_dev_adr << 1, LL_I2C_ADDRSLAVE_7BIT, chunk,
-                          _i2c_remaining ? LL_I2C_MODE_RELOAD : LL_I2C_MODE_AUTOEND,
-                          LL_I2C_GENERATE_START_WRITE);
-    if (!I2C_WAIT_FOR(LL_I2C_IsActiveFlag_TXIS(I2C_I2Cx) || LL_I2C_IsActiveFlag_NACK(I2C_I2Cx))
-        || LL_I2C_IsActiveFlag_NACK(I2C_I2Cx)) {
-        LL_DMA_DisableChannel(I2C_LPDMA_CHANNEL);
-        _i2c_reset();
-        _i2c_busy = 0;
-        return HAL_ERROR;
-    }
-    LL_I2C_TransmitData8(I2C_I2Cx, reg_adr);
-    LL_I2C_EnableDMAReq_TX(I2C_I2Cx);
-
-    return HAL_OK;
+// ends a DMA transfer, good or bad: interrupts off again, DMA stopped, not busy anymore
+static void _i2c_dma_end(void)
+{
+    LL_I2C_DisableIT_STOP(I2C_I2Cx);
+    LL_I2C_DisableIT_TC(I2C_I2Cx);
+    LL_I2C_DisableIT_ERR(I2C_I2Cx);
+    LL_I2C_DisableDMAReq_TX(I2C_I2Cx);
+    LL_DMA_DisableChannel(I2C_LPDMA_CHANNEL);
+    _i2c_busy = 0;
 }
 
 
 static HAL_StatusTypeDef _i2c_put_blocked(uint8_t* reg_adr, uint8_t* buf, uint16_t len)
 {
+    if (_i2c_busy) return HAL_BUSY;
+
     uint32_t total = (uint32_t)len + (reg_adr ? 1 : 0);
     uint32_t chunk = (total > I2C_NBYTES_MAX) ? I2C_NBYTES_MAX : total;
     uint32_t remaining = total - chunk;
-
-    if (_i2c_busy) return HAL_BUSY;
 
     LL_I2C_HandleTransfer(I2C_I2Cx, i2c_dev_adr << 1, LL_I2C_ADDRSLAVE_7BIT, chunk,
                           remaining ? LL_I2C_MODE_RELOAD : LL_I2C_MODE_AUTOEND,
@@ -323,6 +357,47 @@ static HAL_StatusTypeDef _i2c_put_blocked(uint8_t* reg_adr, uint8_t* buf, uint16
 
     if (!I2C_WAIT_FOR(LL_I2C_IsActiveFlag_STOP(I2C_I2Cx))) { _i2c_reset(); return HAL_ERROR; }
     LL_I2C_ClearFlag_STOP(I2C_I2Cx);
+    return HAL_OK;
+}
+
+
+// the transfer is one write: the register/control byte, then len data bytes, STOP by AUTOEND.
+// TXIS is set as soon as the START is launched and TXDR is empty, so writing the first byte
+// here does not wait on the bus, and the DMA supplies the rest.
+static HAL_StatusTypeDef _i2c_put_dma(uint8_t reg_adr, uint8_t* buf, uint16_t len)
+{
+    if (_i2c_busy) return HAL_BUSY;
+    if (len == 0) return _i2c_put_blocked(&reg_adr, buf, 0); // LPDMA rejects an empty block
+    _i2c_busy = 1;
+
+    _i2c_clear_errors(); // a stale one would end the transfer as soon as ERRIE goes on
+
+    LL_DMA_SetSrcAddress(I2C_LPDMA_CHANNEL, (uint32_t)buf);
+    LL_DMA_SetBlkDataLength(I2C_LPDMA_CHANNEL, len);
+    LL_DMA_EnableChannel(I2C_LPDMA_CHANNEL);
+
+    uint32_t total = (uint32_t)len + 1;
+    uint32_t chunk = (total > I2C_NBYTES_MAX) ? I2C_NBYTES_MAX : total;
+    _i2c_remaining = total - chunk;
+
+    LL_I2C_HandleTransfer(I2C_I2Cx, i2c_dev_adr << 1, LL_I2C_ADDRSLAVE_7BIT, chunk,
+                          _i2c_remaining ? LL_I2C_MODE_RELOAD : LL_I2C_MODE_AUTOEND,
+                          LL_I2C_GENERATE_START_WRITE);
+    if (!I2C_WAIT_FOR(LL_I2C_IsActiveFlag_TXIS(I2C_I2Cx) || LL_I2C_IsActiveFlag_NACK(I2C_I2Cx))
+        || LL_I2C_IsActiveFlag_NACK(I2C_I2Cx)) {
+        _i2c_dma_end();
+        _i2c_reset();
+        return HAL_ERROR;
+    }
+    LL_I2C_TransmitData8(I2C_I2Cx, reg_adr);
+
+    // from here on the ISRs own the transfer. A NACK on the byte just written has its STOP
+    // flag pending by now, and is then picked up as soon as STOPIE goes on.
+    LL_I2C_EnableIT_STOP(I2C_I2Cx);
+    LL_I2C_EnableIT_TC(I2C_I2Cx); // TCIE covers TCR, which the >255 byte chunking needs
+    LL_I2C_EnableIT_ERR(I2C_I2Cx);
+    LL_I2C_EnableDMAReq_TX(I2C_I2Cx);
+
     return HAL_OK;
 }
 
@@ -378,6 +453,7 @@ HAL_StatusTypeDef i2c_device_ready(void)
 }
 
 
+// only live during a DMA transfer, see _i2c_put_dma()
 void I2C_EV_IRQHandler(void)
 {
     // TCR means the current NBYTES chunk is done and the peripheral is stretching SCL until
@@ -392,10 +468,24 @@ void I2C_EV_IRQHandler(void)
 
     if (LL_I2C_IsActiveFlag_STOP(I2C_I2Cx)) {
         LL_I2C_ClearFlag_STOP(I2C_I2Cx);
-        LL_I2C_DisableDMAReq_TX(I2C_I2Cx);
-        LL_DMA_DisableChannel(I2C_LPDMA_CHANNEL);
-        _i2c_busy = 0;
+        _i2c_dma_end();
+        // the slave gave up early: the STOP came by itself, but the DMA may have left a byte
+        // in TXDR, which would otherwise go out as the first byte of the next transfer
+        if (LL_I2C_IsActiveFlag_NACK(I2C_I2Cx)) {
+            LL_I2C_ClearFlag_NACK(I2C_I2Cx);
+            LL_I2C_ClearFlag_TXE(I2C_I2Cx);
+        }
     }
+}
+
+
+// bus error, arbitration lost, or SCL held low for too long. No STOP follows any of these,
+// so without this the transfer would stay busy forever.
+void I2C_ER_IRQHandler(void)
+{
+    _i2c_dma_end();
+    _i2c_clear_errors();
+    _i2c_reset();
 }
 
 
@@ -419,14 +509,22 @@ void i2c_init(void)
     gpio_init_af(I2C_SCL_IO, IO_MODE_OUTPUT_ALTERNATE_OD, I2C_SCL_IO_AF, IO_SPEED_FAST);
     gpio_init_af(I2C_SDA_IO, IO_MODE_OUTPUT_ALTERNATE_OD, I2C_SDA_IO_AF, IO_SPEED_FAST);
 
-    LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_I2C1);
+    LL_APB1_GRP1_EnableClock(I2C_C5_RCC_PERIPH);
 
     LL_I2C_Disable(I2C_I2Cx);
+    LL_I2C_DisableIT_STOP(I2C_I2Cx); // a soft restart can come in mid transfer
+    LL_I2C_DisableIT_TC(I2C_I2Cx);
+    LL_I2C_DisableIT_ERR(I2C_I2Cx);
+    LL_I2C_DisableDMAReq_TX(I2C_I2Cx);
     LL_I2C_SetTiming(I2C_I2Cx, I2C_TIMINGR);
+    LL_I2C_DisableSMBusTimeout(I2C_I2Cx, LL_I2C_SMBUS_TIMEOUTA); // TIMEOUTA is locked while on
+    LL_I2C_ConfigSMBusTimeout(I2C_I2Cx, I2C_SCL_LOW_TMO, LL_I2C_SMBUS_TIMEOUTA_MODE_SCL_LOW, 0);
+    LL_I2C_EnableSMBusTimeout(I2C_I2Cx, LL_I2C_SMBUS_TIMEOUTA);
     LL_I2C_Enable(I2C_I2Cx);
 
     // the LPDMA channel keeps its configuration, only source and length change per transfer
     LL_AHB1_GRP1_EnableClock(I2C_LPDMA_PERIPH);
+    LL_DMA_DisableChannel(I2C_LPDMA_CHANNEL);
     LL_DMA_SetPeriphRequest(I2C_LPDMA_CHANNEL, I2C_LPDMA_REQUEST_TX);
     LL_DMA_SetDataTransferDirection(I2C_LPDMA_CHANNEL, LL_DMA_DIRECTION_MEMORY_TO_PERIPH);
     LL_DMA_SetSrcIncMode(I2C_LPDMA_CHANNEL, LL_DMA_SRC_ADDR_INCREMENTED);
@@ -435,9 +533,9 @@ void i2c_init(void)
     LL_DMA_SetDestDataWidth(I2C_LPDMA_CHANNEL, LL_DMA_DEST_DATA_WIDTH_BYTE);
     LL_DMA_SetDestAddress(I2C_LPDMA_CHANNEL, (uint32_t)&(I2C_I2Cx->TXDR));
 
-    LL_I2C_EnableIT_STOP(I2C_I2Cx);
-    LL_I2C_EnableIT_TC(I2C_I2Cx); // TCIE covers TCR, which the >255 byte chunking needs
+    // the interrupt sources themselves are switched on per DMA transfer
     nvic_irq_enable_w_priority(I2C_EV_IRQn, I2C_IT_IRQ_PRIORITY);
+    nvic_irq_enable_w_priority(I2C_ER_IRQn, I2C_IT_IRQ_PRIORITY);
 }
 
 #else
